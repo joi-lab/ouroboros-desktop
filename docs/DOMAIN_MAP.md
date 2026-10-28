@@ -16,7 +16,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D06 | Review stack | 95 | 0 |
 | D07 | Delegation, subagents & Claudexor | 92 | 0 |
 | D08 | Supervisor: queue, workers, events & runtime control | 73 | 0 |
-| D09 | Cancellation, owner control & process custody | 25 | 0 |
+| D09 | Cancellation, owner control & process custody | 27 | 0 |
 | D10 | Git, update & release machinery | 40 | 0 |
 | D11 | Gateway, server & Web UI | 108 | 0 |
 | D12 | Settings & configuration | 26 | 0 |
@@ -25,10 +25,10 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D15 | Memory, knowledge, consciousness & self-evolution | 32 | 0 |
 | D16 | Observability, usage accounting & cost | 26 | 0 |
 | D17 | Projects, workspaces & task results | 51 | 0 |
-| D18 | Launcher, packaging, platform & shared substrate | 36 | 0 |
+| D18 | Launcher, packaging, platform & shared substrate | 37 | 0 |
 | D19 | Frozen contracts (ABI) | 12 | 0 |
 | D20 | Presence | 20 | 0 |
-| **total** | | **911** | **0** |
+| **total** | | **914** | **0** |
 
 ## Dependency direction matrix (strict, pinned)
 
@@ -682,6 +682,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 ### D09 — Cancellation, owner control & process custody
 
 - `ouroboros/cancel_intents.py`
+- `ouroboros/custody_owed.py`
 - `ouroboros/local_custody_repair.py`
 - `ouroboros/model_wait.py`
 - `ouroboros/owned_shutdown.py`
@@ -691,6 +692,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/process_census.py`
 - `ouroboros/process_containment.py`
 - `ouroboros/process_custody.py`
+- `ouroboros/process_identity.py`
 - `ouroboros/process_lifeline.py`
 - `ouroboros/process_overload.py`
 - `ouroboros/process_scope.py`
@@ -1122,6 +1124,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/packaged_cli.py`
 - `ouroboros/packaged_cli_install.py`
 - `ouroboros/panic_source.py`
+- `ouroboros/platform_darwin_abi.py`
 - `ouroboros/platform_layer.py`
 - `ouroboros/platform_peer.py`
 - `ouroboros/platform_win32_abi.py`

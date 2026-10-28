@@ -432,7 +432,7 @@ def test_probe_shaped_send_holds_the_pause_only_while_it_runs(tmp_path, monkeypa
         refused = queue.resume_budget_paused_task("root")
         assert refused["error"] == "owner_pause_effects_unsettled", refused
         assert refused["blockers"] == [{"kind": "model_handoff", "attempt_id": reservations[0].attempt_id,
-                                        "review_owned": False, "task_id": "root"}]
+                                        "review_owned": False, "task_id": "root", "reason": "no_local_receiver"}]
         assert _row(tmp_path, reservations[0].attempt_id)["state"] == "dispatched"
     finally:
         release.set()

@@ -245,6 +245,11 @@ def _delegated_receipt_counts(value: Any) -> tuple[int, int] | None:
     return counts
 
 
+# Local custody rows are written only by their owners and the retirement writers on the canonical
+# result (``tool_custody``, ``local_custody_repair``); a child's replica carries results, not custody.
+CANONICAL_CUSTODY_FIELDS = ("launch_handoffs", "retired_tool_invocations", "retired_model_consumers")
+
+
 def project_replica_task_result_fields(
     canonical_fields: Dict[str, Any],
     replica_fields: Dict[str, Any],
@@ -269,6 +274,8 @@ def project_replica_task_result_fields(
     # including its absence on historical rows; replicas cannot originate it.
     overlay.pop("canonical_terminal_projection_origin", None)
     overlay.pop("pause_notices", None)  # confirmed host transitions alone own pending chat disclosure
+    for field in CANONICAL_CUSTODY_FIELDS:  # a replica never revives a retired claim nor erases a live one
+        overlay.pop(field, None)
     # Unread-mail custody is a union: a stale replica never drops a canonical row.
     from ouroboros.task_custody import merge_unread_mail
 

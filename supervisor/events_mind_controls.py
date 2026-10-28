@@ -2,7 +2,7 @@
 
 import json
 
-from ouroboros.control_actor import mind_control
+from ouroboros.control_actor import accepting_unknown, mind_control
 from ouroboros.utils import append_jsonl, utc_now_iso
 
 
@@ -31,7 +31,8 @@ def _apply(evt: dict) -> dict:
     if action == "pause_task" and actor == task_id:
         return {"ok": False, "error": "self_pause_refused"}
     reason = str(evt.get("reason") or "")
-    with mind_control(actor, reason):
+    named = evt.get("accept_unknown") if action == "resume_task" and isinstance(evt.get("accept_unknown"), list) else ()
+    with mind_control(actor, reason), accepting_unknown(named, reason):
         if action == "pause_task":
             # The owner reads this declared author and sentence; like ``mind_control``, it grants no power.
             return request_owner_pause(task_id, request_id=nonce,
@@ -52,6 +53,7 @@ def handle_mind_task_control(evt: dict, ctx) -> None:
         outcome = {"ok": False, "error": "control_outcome_unknown", "detail": str(exc)}
     record = {"ts": utc_now_iso(), "type": "mind_task_control_outcome",
               **{key: evt.get(key) for key in ("task_id", "action", "actor_task_id", "action_nonce", "reason")},
+              **({"accept_unknown": evt["accept_unknown"]} if evt.get("accept_unknown") else {}),
               "actor": "mind", "outcome": outcome}
     append_jsonl(ctx.DRIVE_ROOT / "logs" / "events.jsonl", record)
     write_task_message(ctx.DRIVE_ROOT, json.dumps(record, ensure_ascii=False), str(evt["actor_task_id"]),

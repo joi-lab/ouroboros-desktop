@@ -174,14 +174,16 @@ def patch_handoff(root: Any, task_id: str, kind: str, op_id: str,
         return None if updated is DELETE_ROW else updated
 
 
-def put_handoffs(root: Any, task_id: str, kind: str, rows: Dict[str, Any]) -> None:
-    """Upsert several operation rows of one projection in one transaction (``LookupError`` as above)."""
+def put_handoffs(root: Any, task_id: str, kind: str, rows: Dict[str, Any], *, only_absent: bool = False) -> None:
+    """Upsert several operation rows of one projection in one transaction (``LookupError`` as above).
+    ``only_absent`` keeps a row already recorded, decided inside the same write."""
     task_id = str(task_id)
     with open_store(root, write=True) as txn:
         if not txn.row(task_id, "status"):
             raise LookupError(f"task {task_id} has no lifecycle row")
         for op_id, facts in rows.items():
-            txn.put_handoff(task_id, kind, str(op_id), facts)
+            if not (only_absent and txn.handoff(task_id, str(op_id)) is not None):
+                txn.put_handoff(task_id, kind, str(op_id), facts)
         txn.touch(task_id)
 
 
