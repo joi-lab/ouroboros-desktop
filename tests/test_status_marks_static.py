@@ -113,12 +113,15 @@ system | web/consciousness.css | .place-convo-row.is-system | background
 system | web/consciousness.css | .place-convo-row.is-system .place-convo-text | color
 system | web/consciousness.css | .place-convo-row.is-system .place-convo-who | color
 system | web/consciousness.css | .place-sheet-section p.place-silent-card | background, color
-# Data categories, not statuses: the Logs task category, code highlighting, the Storage temporary segment.
+# Data categories, not statuses: the Logs task category, code highlighting, the Storage temporary segment, the
+# fourth default chart series.
 data | web/style.css | .log-type.tasks | color
 data | web/style.css | .md-code-block .hljs-class .hljs-title | color
 data | web/style.css | .md-code-block .hljs-type | color
 data | web/style.css | :is(.storage-bar-seg, .storage-key)[data-group="temporary"] | background
 data | web/style.css | :root[data-theme="light"] .md-code-block .hljs-class .hljs-title | color
+data | web/ui.css | :root | --chart-series-4
+data | web/ui.css | :root[data-theme="light"] | --chart-series-4
 # The palette that defines the amber tokens and their aliases.
 palette | web/ui.css | :root | --amber, --mark-owner, --status-warn-fg, --status-warn-word, --system-sender
 palette | web/ui.css | :root[data-theme="light"] | --amber, --amber-dim, --status-warn-bg, --status-warn-border, --status-warn-fg
@@ -126,9 +129,9 @@ palette | web/ui.css | :root[data-theme="light"] | --system-bubble-bg, --system-
 palette | web/ui.css | :root[data-theme="light"] | --tone-amber-hover
 """
 
-# How many amber references each first-party script may hold, all data categories: a chart series colour (a widget
-# chart's palette) and Logs' task category.
-SCRIPT_AMBER = {"web/modules/log_events.js": 1, "web/modules/widget_chart.js": 2}
+# How many amber references each first-party script may hold, all data categories: the fourth default chart series
+# (theme_palette.js, which host charts draw from) and Logs' task category.
+SCRIPT_AMBER = {"web/modules/log_events.js": 1, "web/modules/theme_palette.js": 1}
 
 
 def _decommented(css: str) -> str:
