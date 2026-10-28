@@ -317,6 +317,24 @@ def test_request_larger_than_a_pipe_reaches_a_late_child_whole(ctx, monkeypatch)
     assert result == {"status": "ok", "data": {"columns": ["n", "tail"], "rows": [[12000, "яя"]], "truncated": False}}
 
 
+def test_child_answer_is_utf8_whatever_its_stdout_code_page(tmp_path, monkeypatch):
+    """A Windows pipe hands the child cp1252 stdout: its answer is UTF-8 bytes there too, and the
+    parent's ``json.loads`` reads them back whole."""
+    import io
+    from ouroboros import process_custody
+
+    request = tmp_path / "request.json"
+    request.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["query_data_sql", "session", str(request)])
+    monkeypatch.setattr(process_custody, "adopt_session_id", lambda _session: None)
+    monkeypatch.setattr(process_custody, "start_parent_lifeline", lambda **_kwargs: None)
+    monkeypatch.setattr(sql, "_result", lambda _request: {"status": "ok", "data": {"rows": [["яё𐍈"]]}})
+    wire = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(wire, encoding="cp1252"))
+    sql.main()
+    assert json.loads(wire.getvalue()) == {"status": "ok", "data": {"rows": [["яё𐍈"]]}}
+
+
 def test_sqlite_failure_owns_only_its_interrupt_and_an_expired_busy_wait(tmp_path):
     # Real SQLite errors: Python 3.10 has no sqlite_errorcode and no sqlite3.SQLITE_* names.
     def failure(conn, statement):

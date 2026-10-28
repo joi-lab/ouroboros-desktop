@@ -313,7 +313,9 @@ def main():
     adopt_session_id(sys.argv[1])
     start_parent_lifeline(label="query_data")
     request = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
-    print(json.dumps(_result(request), ensure_ascii=False), flush=True)
+    # UTF-8 on the wire whatever the console code page: a Windows pipe defaults to cp1252.
+    sys.stdout.buffer.write((json.dumps(_result(request), ensure_ascii=False) + "\n").encode("utf-8"))
+    sys.stdout.buffer.flush()
 
 
 if __name__ == "__main__":

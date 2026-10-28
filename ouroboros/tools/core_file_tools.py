@@ -398,7 +398,7 @@ def _list_dir(root: pathlib.Path, rel: str, max_entries: int = 500) -> List[str]
             items.append(f"...(truncated at {max_entries})")
             break
         suffix = "/" if entry.is_dir() else ""
-        items.append(str(entry.relative_to(root)) + suffix)
+        items.append(entry.relative_to(root).as_posix() + suffix)
     return items
 
 
@@ -427,7 +427,7 @@ def _list_user_files_dir(ctx: ToolContext, root: pathlib.Path, target: pathlib.P
         # the whole listing on relative_to (v6.54.3: the TB2.1
         # "'/app/…' is not in the subpath of '/root'" class).
         try:
-            rendered = str(entry.relative_to(root))
+            rendered = entry.relative_to(root).as_posix()
         except ValueError:
             rendered = str(entry)
         items.append(rendered + suffix)
