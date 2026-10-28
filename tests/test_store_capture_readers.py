@@ -8,7 +8,7 @@ import sqlite3
 
 import pytest
 
-from ouroboros import projects_registry, store, store_task_cards, task_store, usage_store
+from ouroboros import owner_pause, projects_registry, store, store_task_cards, task_store, usage_store
 from ouroboros._usage_rows import breakdown_read, breakdown_view
 from tests._cost_meter import CostMeter, tagged
 from tests._store_shared import seed_result
@@ -133,6 +133,60 @@ def _old_retention(root, ids):
         f"({','.join('?' * len(ids))})", ids)}
 
 
+def _old_tree_facts(root, tree_id, *, descendants=False, queue_rows=(), linked=()):
+    """#2371's ``task_store.tree_facts`` verbatim but for module prefixes: every statement stepped row by row."""
+    from ouroboros.store_hot_facts import VERSION
+
+    tree_sql = task_store._TREE_SQL
+    tree_id = str(tree_id)
+    with store.open_store(root, write=False) as txn:
+        flagged = int(txn.meta("schema_version") or VERSION) >= VERSION
+        captured = txn.conn.execute(
+            f"SELECT {tree_sql},b.body FROM tasks AS t LEFT JOIN task_bodies AS b ON b.task_id=t.task_id "
+            "WHERE t.root_task_id IS NULL" + (" OR (t.root_task_id=? AND t.control_valid=0)" if flagged else ""),
+            (tree_id,) if flagged else ()).fetchall()
+        selected = {row["task_id"]: dict(row) for row in txn.conn.execute(
+            f"SELECT {tree_sql} FROM tasks AS t WHERE t.root_task_id=?", (tree_id,))}
+        ties = {*map(str, linked), *(row[0] for row in txn.conn.execute(
+            "SELECT task_id FROM task_handoffs WHERE task_id IN (SELECT value FROM json_each(?)) AND "
+            "CASE WHEN json_valid(facts) THEN json_extract(facts, '$.root_task_id') END=?",
+            (json.dumps([r["task_id"] for r in captured]), tree_id)))}
+        if descendants:
+            members, rows, faults = task_store._validated(tree_id, selected, captured)
+            queued = {}
+            for row in queue_rows:
+                tid = str(row.get("task_id") or row.get("id") or "")
+                if tid:
+                    queued.setdefault(tid, row)
+            durable_queue = {row["task_id"]: dict(row) for row in txn.conn.execute(
+                f"SELECT {tree_sql} FROM tasks AS t "
+                "WHERE t.task_id IN (SELECT value FROM json_each(?))", (json.dumps(list(queued)),))}
+            queued.update({tid: rows.get(tid, row) for tid, row in durable_queue.items()})
+            anchors = {tree_id, *members}
+            while True:
+                reach = txn.conn.execute(
+                    "WITH RECURSIVE reach(id) AS (SELECT value FROM json_each(?) UNION "
+                    "SELECT t.task_id FROM tasks AS t JOIN reach ON t.parent_task_id=reach.id) "
+                    f"SELECT {tree_sql} FROM tasks AS t "
+                    "WHERE t.task_id IN (SELECT id FROM reach)", (json.dumps(sorted(anchors)),)).fetchall()
+                members.update({row["task_id"]: rows.get(row["task_id"], dict(row)) for row in reach})
+                reached = {tree_id, *members}
+                while True:
+                    extra = {tid for tid, row in queued.items() if tid not in reached and (
+                        str(row.get("root_task_id") or "") == tree_id
+                        or str(row.get("parent_task_id") or "") in reached)}
+                    if not extra:
+                        break
+                    reached.update(extra)
+                new = reached - anchors - members.keys()
+                members.update({tid: row for tid, row in queued.items() if tid in reached and tid not in members})
+                if not new:
+                    return task_store.TreeCensus(members, task_store._tied(tree_id, members, rows, faults, ties))
+                anchors.update(reached)
+    members, rows, faults = task_store._validated(tree_id, selected, captured)
+    return task_store.TreeCensus(members, task_store._tied(tree_id, members, rows, faults, ties))
+
+
 # ---- equality --------------------------------------------------------------------------------------------------
 
 def test_task_readers_answer_what_the_pre_change_readers_answered(tmp_path, monkeypatch):
@@ -230,8 +284,8 @@ def test_usage_readers_answer_what_the_in_transaction_readers_answer(data_root):
                               ("task_id=?", ("t2",)), ("root_task_id=? OR task_id=?", ("root", "root"))):
             assert usage_store.decode_attempts(txn.attempt_rows(where, params)) == txn.attempts(where, params), where
         assert txn.open_attempts() == txn.attempts(usage_store._OPEN_PREDICATE) != []
-        assert txn.open_attempts(root_task_id="root") == txn.attempts(
-            f"{usage_store._OPEN_PREDICATE} AND root_task_id=?", ("root",))
+        open_root = txn.attempts(f"{usage_store._OPEN_PREDICATE} AND root_task_id=?", ("root",))
+        assert txn.open_attempts(root_task_id="root") == open_root != []
         shapes = ({}, {"include_owners": True}, {"root_task_id": "root"}, {"task_id": "t2"},
                   {"root_task_id": "root2", "task_id": "t2"}, {"root_task_id": "absent"})
         renders = [(shape, breakdown_read(txn, **shape)) for shape in shapes]
@@ -240,6 +294,64 @@ def test_usage_readers_answer_what_the_in_transaction_readers_answer(data_root):
     for index, (shape, render) in enumerate(renders):  # rendered after the read closed
         for degraded in (False, True):
             assert render(degraded) == expected[(index, degraded)], shape
+    assert owner_pause.tree_model_requests(data_root, "root") == open_root  # #2371's census read, captured
+
+
+QUEUE = [{"task_id": "queued-1", "parent_task_id": "grandchild", "status": "requested"},
+         {"id": "queued-2", "parent_task_id": "queued-1", "status": "requested"},
+         {"task_id": "child", "parent_task_id": "root-1", "status": "requested"}]  # the durable row wins
+
+
+def _census_store(root):
+    """#2371's ``_tree`` with every damage kind, rows tied each way, a flagged pair, a grandchild, BLOB bodies
+    (one spelling its own document) and a handoff that ties beside one that cannot."""
+    from tests.test_hot_facts import _old_task, _task
+    from tests.test_tree_census_damage import DAMAGE, _damage, _tree
+
+    _tree(root)
+    for kind in DAMAGE:
+        _damage(root, f"stray-{kind}", kind)
+    _damage(root, "tied-parent", "torn", parent_task_id="child")
+    _damage(root, "tied-handoff", "array")
+    _damage(root, "bad-handoff", "null")
+    with store.open_store(root, write=True) as txn:
+        _task(txn, "grandchild", parent_task_id="child", root_task_id="root-1", status="running")
+        _task(txn, "odd", parent_task_id="root-1", root_task_id="root-1", status="")  # flagged, its own body
+        _task(txn, "copied", root_task_id="root-1", status="")  # flagged, another task's body
+        txn.conn.execute("UPDATE task_bodies SET body=? WHERE task_id='copied'",
+                         (store.encode_document({**txn.load("copied"), "task_id": "someone-else"}),))
+        _old_task(txn, "blob-own", parent_task_id="root-1", metadata={"root_task_id": "root-1"})
+        _old_task(txn, "blob-torn")
+        txn.conn.execute("UPDATE task_bodies SET body=CAST(body AS BLOB) WHERE task_id='blob-own'")
+        txn.conn.execute("UPDATE task_bodies SET body=CAST('{' AS BLOB) WHERE task_id='blob-torn'")
+        txn.put_handoff("tied-handoff", "launch_handoffs", "op-1",
+                        {"tool": "shell", "task_id": "tied-handoff", "root_task_id": "root-1", "state": "claimed"})
+        txn.conn.execute("INSERT INTO task_handoffs (task_id, op_id, kind, facts) "
+                         "VALUES ('bad-handoff', 'op-1', 'launch_handoffs', '{')")
+
+
+def test_the_tree_census_answers_what_its_per_row_read_answered(tmp_path):
+    """Members and gaps equal #2371's per-row census, in the same order, with and without planner statistics."""
+    _census_store(tmp_path)
+    for analyzed in (False, True):
+        if analyzed:
+            with store.open_store(tmp_path, write=True) as txn:
+                txn.conn.execute("ANALYZE")
+        for tree in ("root-1", "other", "child", "stray-torn"):
+            for descendants, queue in ((False, ()), (True, ()), (True, QUEUE)):
+                for linked in ((), ("stray-torn", "stray-array")):
+                    shape = (analyzed, tree, descendants, bool(queue), linked)
+                    new = task_store.tree_facts(tmp_path, tree, descendants=descendants, queue_rows=queue,
+                                                linked=linked)
+                    old = _old_tree_facts(tmp_path, tree, descendants=descendants, queue_rows=queue, linked=linked)
+                    assert list(new.members.items()) == list(old.members.items()), shape
+                    assert list(new.unresolved.items()) == list(old.unresolved.items()), shape
+    census = task_store.tree_facts(tmp_path, "root-1", descendants=True, queue_rows=QUEUE)  # the cases were real
+    assert {"child", "grandchild", "legacy", "odd", "blob-own", "queued-1", "queued-2"} <= set(census.members)
+    assert census.members["child"]["status"] == "running" and "copied" not in census.members
+    assert census.unresolved["tied-parent"]["linked"] and census.unresolved["tied-handoff"]["linked"]
+    assert not census.unresolved["bad-handoff"]["linked"]
+    assert census.unresolved["blob-torn"] == {"reason": "body_unreadable", "linked": False}
 
 
 # ---- O(statements) rows into Python -----------------------------------------------------------------------------
@@ -269,6 +381,8 @@ def test_captured_readers_hand_python_rows_by_statement_not_by_row(tmp_path):
         "collection_ids": lambda root, ids: task_store._collection_ids(root, "review_collection_pending", 0, ""),
         "drive_retention_facts": lambda root, ids: task_store.drive_retention_facts(root, ids, stop=lambda: True),
         "lineage": lambda root, ids: projects_registry._read_lineage(root, ids),
+        "tree_facts": lambda root, ids: task_store.tree_facts(root, "t000"),
+        "tree_facts(descendants)": lambda root, ids: task_store.tree_facts(root, "t000", descendants=True),
     }
     for name, reader in readers.items():
         (few, few_statements), (many, many_statements) = (

@@ -549,6 +549,12 @@ def _tied(tree_id: str, members: Dict[str, dict], rows: Dict[str, dict], faults:
         tied |= more
 
 
+def _keyed(captured: Captured) -> Dict[str, dict]:
+    """A captured census selection by task id, in the order its statement answered (none has an ORDER BY;
+    the aggregate keeps the order the rows were stepped in, as the per-row read did)."""
+    return {row["task_id"]: row for row in captured.rows()}
+
+
 def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
                queue_rows: Iterable[dict] = (), linked: Iterable[str] = ()) -> TreeCensus:
     """Typed membership; a row whose root rests on its own record is validated alone.
@@ -559,8 +565,9 @@ def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
     A missing, unparsable, non-object or other task's body leaves that ROW unresolved, never the
     census: ``linked`` when a typed parent/retry/supersession edge to or from this tree, a handoff
     naming it or a caller's ``linked`` id (queue, custody, model request) ties it here; otherwise
-    a named gap, neither member nor proof of absence. A store failure raises. Bodies are decoded
-    after the read, unless descendant anchors need them within it (one snapshot either way).
+    a named gap, neither member nor proof of absence. A store failure raises. Each statement is
+    captured in one step (``store_capture``) and decoded after the read, unless descendant anchors
+    need them within it (one snapshot either way).
     Descendant selection closes over the indexed parent chain, including bridges present only in
     the queue snapshot; a row reached so is a member by ancestry, and a damaged one stays named
     (linked) beside it. Durable rows win over queue rows. The caller still applies its own
@@ -571,18 +578,20 @@ def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
     tree_id = str(tree_id)
     with open_store(root, write=False) as txn:
         flagged = int(txn.meta("schema_version") or VERSION) >= VERSION  # control_valid exists
-        captured = txn.conn.execute(
-            f"SELECT {_TREE_SQL},b.body FROM tasks AS t LEFT JOIN task_bodies AS b ON b.task_id=t.task_id "
-            "WHERE t.root_task_id IS NULL" + (" OR (t.root_task_id=? AND t.control_valid=0)" if flagged else ""),
-            (tree_id,) if flagged else ()).fetchall()
-        selected = {row["task_id"]: dict(row) for row in txn.conn.execute(
-            f"SELECT {_TREE_SQL} FROM tasks AS t WHERE t.root_task_id=?", (tree_id,))}
-        ties = {*map(str, linked), *(row[0] for row in txn.conn.execute(  # a damaged handoff ties nothing
-            "SELECT task_id FROM task_handoffs WHERE task_id IN (SELECT value FROM json_each(?)) AND "
-            "CASE WHEN json_valid(facts) THEN json_extract(facts, '$.root_task_id') END=?",
-            (json.dumps([r["task_id"] for r in captured]), tree_id)))}
-        if descendants:
-            members, rows, faults = _validated(tree_id, selected, captured)
+        where = "t.root_task_id IS NULL" + (" OR (t.root_task_id=? AND t.control_valid=0)" if flagged else "")
+        params = (tree_id,) if flagged else ()
+        bodies = capture(txn.conn,  # CAST: a damaged BLOB body travels as the text its bytes spell, as it was read
+                         f"SELECT {_TREE_SQL},CAST(b.body AS TEXT) AS body FROM tasks AS t LEFT JOIN task_bodies AS b "
+                         f"ON b.task_id=t.task_id WHERE {where}", params, (*_TREE_ROW, "body"))
+        selected = capture(txn.conn, f"SELECT {_TREE_SQL} FROM tasks AS t WHERE t.root_task_id=?", (tree_id,),
+                           _TREE_ROW)
+        handoffs = capture(txn.conn,  # those rows' handoffs naming this tree; a damaged handoff ties nothing
+                           "SELECT task_id FROM task_handoffs WHERE task_id IN (SELECT t.task_id FROM tasks AS t "
+                           f"WHERE {where}) AND CASE WHEN json_valid(facts) THEN "
+                           "json_extract(facts, '$.root_task_id') END=?", (*params, tree_id), ("task_id",))
+        if descendants:  # the closure's anchors are these rows: decoded inside this one snapshot
+            ties = {*map(str, linked), *(row[0] for row in handoffs.tuples())}
+            members, rows, faults = _validated(tree_id, _keyed(selected), bodies.rows())
             queued = {}
             for row in queue_rows:
                 tid = str(row.get("task_id") or row.get("id") or "")
@@ -590,18 +599,18 @@ def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
                     queued.setdefault(tid, row)
             # A queue record cannot replace a durable row, even when that row is
             # outside the selected tree. This addressed read preserves that rule.
-            durable_queue = {row["task_id"]: dict(row) for row in txn.conn.execute(
-                f"SELECT {_TREE_SQL} FROM tasks AS t "
-                "WHERE t.task_id IN (SELECT value FROM json_each(?))", (json.dumps(list(queued)),))}
+            durable_queue = _keyed(capture(txn.conn, f"SELECT {_TREE_SQL} FROM tasks AS t WHERE t.task_id IN "
+                                           "(SELECT value FROM json_each(?))", (json.dumps(list(queued)),), _TREE_ROW))
             queued.update({tid: rows.get(tid, row) for tid, row in durable_queue.items()})
             anchors = {tree_id, *members}
             while True:
-                reach = txn.conn.execute(
-                    "WITH RECURSIVE reach(id) AS (SELECT value FROM json_each(?) UNION "
-                    "SELECT t.task_id FROM tasks AS t JOIN reach ON t.parent_task_id=reach.id) "
-                    f"SELECT {_TREE_SQL} FROM tasks AS t "
-                    "WHERE t.task_id IN (SELECT id FROM reach)", (json.dumps(sorted(anchors)),)).fetchall()
-                members.update({row["task_id"]: rows.get(row["task_id"], dict(row)) for row in reach})
+                reach = capture(txn.conn,
+                                "WITH RECURSIVE reach(id) AS (SELECT value FROM json_each(?) UNION "
+                                "SELECT t.task_id FROM tasks AS t JOIN reach ON t.parent_task_id=reach.id) "
+                                f"SELECT {_TREE_SQL} FROM tasks AS t "
+                                "WHERE t.task_id IN (SELECT id FROM reach)", (json.dumps(sorted(anchors)),),
+                                _TREE_ROW).rows()
+                members.update({row["task_id"]: rows.get(row["task_id"], row) for row in reach})
                 reached = {tree_id, *members}
                 while True:
                     extra = {tid for tid, row in queued.items() if tid not in reached and (
@@ -614,7 +623,8 @@ def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
                 if not new:
                     return TreeCensus(members, _tied(tree_id, members, rows, faults, ties))
                 anchors.update(reached)
-    members, rows, faults = _validated(tree_id, selected, captured)
+    ties = {*map(str, linked), *(row[0] for row in handoffs.tuples())}
+    members, rows, faults = _validated(tree_id, _keyed(selected), bodies.rows())
     return TreeCensus(members, _tied(tree_id, members, rows, faults, ties))
 
 
