@@ -73,6 +73,9 @@ def input_source_selection_receipt(task: Mapping[str, Any]) -> dict[str, Any]:
             "Tools, messages, reviews and restored sources are additional inputs; reading outside "
             "the declared corpus changes the claim. Retained model-send/tool-source projections "
             "record the actual sequence."
+            + (" If this task delegates, the host adds the knowledge index (the global shelf's and "
+               "its room's) once, to the result of its first accepted delegation; knowledge_list "
+               "reads it again." if with_words else "")
         ),
         "limitations": (
             "No sandbox, no semantic filtering of declared facts or governance/authority, and no "
