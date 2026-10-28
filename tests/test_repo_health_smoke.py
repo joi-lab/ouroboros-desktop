@@ -765,6 +765,28 @@ def test_pairwise_degraded_parent_base_must_match_its_own_tree(tmp_path: Path) -
     assert "fabricated base" in error or "does not match the parent's own tree" in error
 
 
+def test_pairwise_degraded_red_parent_does_not_condemn_its_fix_forward(tmp_path: Path) -> None:
+    """Two merges that each fit can push a band module past 1600 lines: that parent's tree holds debt its
+    manifest omits, which is red, not fabricated. Against it, the tip that shrinks the module passes in the
+    degraded mode (dispatch and tags carry no base); a tip that keeps the debt still fails its live check."""
+    repo = tmp_path / "repo"
+    baseline = _bootstrap_repo(repo)
+    _write_lines(repo / "edge.py", MAX_MODULE_LINES)
+    _write_manifest(repo, _manifest(band_paths={"edge.py": "sits at the module limit"}, sha=baseline))
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "a band module at the limit")
+    _write_lines(repo / "edge.py", MAX_MODULE_LINES + 5)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "two merges together cross the limit")
+    assert validate_size_ratchet(repo), "the red parent fails its own live check"
+    _write_lines(repo / "edge.py", MAX_MODULE_LINES - 1)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "fix forward")
+
+    assert validate_size_ratchet_transition_against_base(repo, "deadbeef" * 5) == []
+    assert validate_size_ratchet(repo) == []
+
+
 def test_interval_rationale_form_allows_legal_reentry_and_blocks_drops(tmp_path: Path) -> None:
     """Across an interval a band path may legally retire and re-enter with a
     fresh rationale (every adjacent step green): the pairwise interval form
