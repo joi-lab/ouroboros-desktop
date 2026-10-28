@@ -1056,10 +1056,11 @@ def release_diagnostics(ctx: ToolContext, paths: Optional[List[str]], source: st
                 "message": "deterministic_only requires explicit source=worktree or source=index."}
     from ouroboros import body_candidate
     from ouroboros.commit_admission import release_metadata_diagnostics
-    from ouroboros.reference_books import BOOK_ENTRYPOINTS, book_balance_note
+    from ouroboros.reference_books import BOOK_ENTRYPOINTS, book_balance_note, ruled_text_paths
 
     repo = pathlib.Path(ctx.repo_dir)
-    note = (book_balance_note(repo, paths if paths is not None else BOOK_ENTRYPOINTS.values())
+    note = (book_balance_note(repo, paths if paths is not None
+                              else [*BOOK_ENTRYPOINTS.values(), *ruled_text_paths(repo)])
             if (repo / "ouroboros" / "reference_books.py").is_file() else "")
     return {**release_metadata_diagnostics(
         repo, paths, source=source, neutral_allowed=True if source == "index" else body_candidate.is_bound(ctx)),

@@ -257,6 +257,22 @@ def test_free_tool_json_reports_cumulative_books_with_an_explicit_byte_source(ca
 
 
 @pytest.mark.parametrize("source", ["worktree", "index"])
+def test_free_diagnostic_without_paths_measures_bible_and_the_prompts(candidate, source):
+    """Omitted paths mean every book and ruled text, so a grown prompt is never 'nothing owed'."""
+    repo = candidate.repo_dir
+    _write(repo, {"ouroboros/reference_books.py": "# book contract\n", "BIBLE.md": "# BIBLE\n",
+                  "prompts/SYSTEM.md": "system\n"})
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "texts")
+    _git(repo, "remote", "add", "official", "https://github.com/razzant/ouroboros.git")
+    _git(repo, "update-ref", "refs/remotes/official/ouroboros", "HEAD")
+    _write(repo, {"prompts/SYSTEM.md": "system, grown\n"})
+    note = _diagnose(candidate, source)["book_balance"]["note"]
+    assert "Prompts 14 B: +7 B vs HEAD" in note and "BIBLE.md 8 B: +0 B vs HEAD" in note
+    assert "nothing owed" not in note and "local commits are not blocked" in note
+
+
+@pytest.mark.parametrize("source", ["worktree", "index"])
 def test_free_book_diagnostic_distinguishes_foreign_and_unknown_baseline(candidate, source):
     # A foreign project can have the same docs paths without the body contract.
     assert _diagnose(candidate, source)["book_balance"]["note"] == ""
