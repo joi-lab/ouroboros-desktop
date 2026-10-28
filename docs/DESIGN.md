@@ -435,8 +435,8 @@ keeps the saved value and says why. No scope selector or extra settings row.
 Each is a neutral **capsule** of the pills' height — ring, name, value: `Subagents Auto`, `Context Max`,
 `Effort X-High`; the name in secondary ink at 500, the value in meta ink at 600,
 and only the ring's lit arc coloured (crimson; Low neutral ink, Nano the Project's): a level is never amber.
-One exception: closed on Swarm, Subagents rests in the soft crimson tone (Off is muted, Auto plain), since
-Swarm asks Ouroboros not to economise (owner 24.10).
+Subagents is no exception: closed, Off is muted and Auto and Swarm read like the others' values; its lit network
+tells them apart, and Swarm never fills the capsule (owner 28.10).
 Until the room's values arrive the ring stays unlit and the value secondary,
 never a faded capsule. Closed, Effort names only the primary level; its ring (a 300°
 arc: band minimum..maximum, dot primary) and the button's name carry the range.
@@ -445,10 +445,12 @@ level or capacity. Subagents' mark is a small network (owner 27.10, G): Ouroboro
 
 **A capsule opens inline, in the row, never as a dropdown or a panel, one at a time** (owner 11.10; the panels tried
 on 26.10 were withdrawn on 27.10); its value yields to the strip. Context's is Nano · Low · Max under a glass thumb; a
-choice posts at once and the strip waits for the answer. Subagents' is Off · Auto · Swarm the same way, and while it
-is open its lines stand under the row: what the value means and «Applies to new steps in this chat; running helpers
-finish.» When Settings turns subagents off or they are not set up yet, it says `Off` with a lock; open, Auto and Swarm
-are disabled and the reason and `Open Settings` stand under the row instead; the room keeps its own value. Effort's seven levels carry
+choice posts at once and the strip waits for the answer. Subagents' is Off · Auto · Swarm the same way. While any
+capsule is open, the one hint ("Hints") stands above it (owner 28.10): the value's word and what it means (a mouse
+resting on another of Subagents' or Context's modes previews that one's) and «Applies to new steps; running work
+finishes.» When Settings turns subagents off or they are not set up yet, Subagents says `Off` with a lock; open, Auto
+and Swarm are disabled and the hint says why with `Open Settings`, the keyboard's next stop after the strip; the room
+keeps its own value. Effort's seven levels carry
 a primary pill and two helper bounds; the primary may lie outside them. A
 segment is its word plus `--capsule-seg-pad` a side; the pill covers its segment;
 band, pill and brackets share one vertical inset. The primary and helper bounds never
@@ -2472,7 +2474,7 @@ app. It never claims approval. Missing promised output, unresolved work, deliver
 uncertainty and unmet or unknown review obligations remain material. This phone
 projection never shortens full card reasons or rewrites outcomes. The status-only
 Main mirror follows the toggle too, but preserved intermediate content does not.
-Ordinary replies, files, questions and reply-editing Silent Mode remain independent. Unrecoverable old mirrors keep their text rather than guessing it is status-only. There is no new mode, cross-channel deduplication or retroactive rewrite.
+Ordinary replies, files and questions remain independent. Telegram's Silent Mode sends replies, the final answer and progress, the host's typed technical notes included, without sound and never merges authored messages: only a progress note replaces the progress note before it, and questions, files and problems (a typed incident among them) keep their sound (owner decision 27.10: keep every message, muted). An answer to a question card, tapped or written, is confirmed in that card by the host's record and delivery; only a conflict, an error or a card that could not be updated adds a message (owner decision 27.10: the card confirms, a message says only a problem). A refused request is told once, replying to the owner's message: its target and the host's reason, then any choice of target and the files not attached. Telegram shows the web's System row for it only when no acknowledgement carried the reason; that row answers the owner's message, or none, never the origin of the task it names. An accepted request stays silent. Unrecoverable old mirrors keep their text rather than guessing it is status-only. There is no new mode, cross-channel deduplication or retroactive rewrite.
 
 **Telegram typing means a reply is being prepared for that chat.** It is a
 native header cue, not a notification. While a reply the owner asked for is
@@ -2861,6 +2863,18 @@ Files location scroll sideways, inside themselves, with a fade where content
 hides. Text wraps before it widens a column. A pinch only magnifies (owner 23.10): while it
 holds, the room keeps its size and a sideways finger pans the magnified page instead
 of moving the drawer.
+
+**Hints.** What a control says about itself on the spot (what a value means, why it is
+locked, when a change applies) is shown by the one hint (`web/modules/ui_hint.js`): the
+popups' floating material, above its control and over the page (below it where the window
+has no room above), never in the flow, the same for a mouse, a finger and the keyboard (a
+mouse also previews the value it rests on). It lives inside its control, so the keyboard
+reaches its one action right after the control (Tab, or Option+Tab in Safari as for every
+button). A hover-only `title` reaches neither a phone nor a keyboard, so it never carries
+what the hint says. Nothing a press opens moves the composer: a surface anchored to the
+bottom never grows to explain, since a line added under its row lifts the row (owner
+28.10); `tests/test_composer_stability_browser.py` presses every control the composer
+opens and holds the field, the row and the pressed control still.
 
 **Telegram.** Inside the Telegram Mini App the page tells Telegram it is ready,
 fills the screen, turns off Telegram's swipe-down so lists scroll, shows

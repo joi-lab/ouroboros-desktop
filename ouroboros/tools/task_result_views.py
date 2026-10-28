@@ -154,14 +154,18 @@ def retained_call_source(ctx, root, data, task_id, call_id, digest, start, end):
                "path": str(call_manifest_path(root, task_id, call_id))}
     else:
         # The selected document may be a retry's: its published calls carry that task's identity.
-        task_id = str(data.get("task_id") or task_id)
+        published = str(data.get("task_id") or task_id)
         rows = (data.get("trace_refs") or {}).get("tool_call_refs") or []
         ref = next((row["manifest_ref"] for row in rows if isinstance(row, dict)
                     and isinstance(row.get("manifest_ref"), dict)
                     and row["manifest_ref"].get("call_id") == call_id
                     and row["manifest_ref"].get("sha256") == digest), None)
-        if ref is None:
-            raise PermissionError("call identity is not published by this task result")
+        if ref is not None:
+            task_id = published
+        else:  # else only the selected task's own timed-out call that settled later (#1376)
+            from ouroboros.late_tool_results import late_call_ref
+
+            ref = late_call_ref(root, task_id, call_id, digest, admit=admit)
     manifest = read_call_manifest_ref(
         root, ref, task_id=task_id, admit=admit, max_bytes=1024 * 1024,
         call_types=("tool_dispatch",) if dispatch else ("tool_call", "tool_timeout"),

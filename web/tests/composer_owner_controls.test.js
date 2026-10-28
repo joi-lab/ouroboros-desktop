@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ElementStub } from './chat_dom_fixture.js';
-import { applyHandle, createEffortRangeControl, snapRange } from '../modules/composer_owner_controls.js';
+import { CHANGE_RULE, applyHandle, createEffortRangeControl, snapRange } from '../modules/composer_owner_controls.js';
 import { hoverWindow, mount, mountPair, sleep, stubDocument } from './composer_controls_fixture.js';
 
 test('primary and helper bounds are independent, and helper bounds cannot cross', () => {
@@ -41,8 +41,12 @@ test('the control mounts after the context capsule, closed: ring, name and the r
     assert.deepEqual(m.control.shown(), { min: 1, rec: 2, max: 3 }, 'the default before the first /api/state');
     assert.equal(m.el.dataset.known, 'false');
     assert.equal(m.handles.rec.getAttribute('aria-valuetext'), 'Medium');
-    assert.match(m.head.title, /^Primary effort: Medium; helpers Low–High\. Applies to new participants in this room\.$/);
-    assert.equal(m.head.getAttribute('aria-label'), m.head.title, 'the closed button says the state, not just "Effort"');
+    assert.equal(m.head.getAttribute('aria-label'), 'Primary effort: Medium; helpers Low–High.', 'the closed button says the state, not just "Effort"');
+    assert.ok(!m.head.title, 'no hover-only title: the hint says it on every surface');
+    const hint = m.el.querySelector('.ui-hint');
+    assert.equal(m.head.getAttribute('aria-describedby'), hint.id, 'a reader hears the hint as the description');
+    assert.deepEqual([hint.hidden, ...['word', 'text', 'rule'].map((part) => hint.querySelector(`.ui-hint-${part}`).textContent)],
+        [true, 'Medium', 'Primary effort; helpers between Low and High.', CHANGE_RULE], 'closed, the hint waits with its words');
     assert.match(m.el.querySelector('[data-ring-band]').getAttribute('d'), /^M[\d.]+ [\d.]+ A70 70 0 0 1 /);
     assert.equal(m.segs.length, 7);
     // The strip is the seven levels alone: no title word of its own, no separator element, no reset button.
@@ -483,7 +487,9 @@ test('the context capsule: ring, Context and the mode; it opens into exactly thr
     assert.equal(m.contextEl.getAttribute('aria-label'), 'Context size mode');
     assert.match(m.contextEl.innerHTML, /class="chat-capsule-name">Context</);
     assert.equal(m.contextEl.querySelector('.chat-capsule-value').textContent, 'Max');
-    assert.match(m.contextHead.title, /^Context mode \(owner setting\)\. Nano is the compact owner window/);
+    assert.ok(!m.contextHead.title, 'no hover-only title: the hint says it on every surface');
+    assert.deepEqual(['word', 'text', 'rule'].map((part) => m.contextHint.querySelector(`.ui-hint-${part}`).textContent),
+        ['Max', 'The full context window.', CHANGE_RULE]);
     const segs = m.contextEl.querySelectorAll('.chat-seg');
     // Three modes, a position among them, never a fill level: three arcs and three radios.
     assert.deepEqual(segs.map((node) => node.dataset.mode), ['nano', 'low', 'max']);

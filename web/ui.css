@@ -924,6 +924,60 @@ textarea.ui-control { resize: vertical; }
     .ui-popup:not([hidden]) { animation: none; }
 }
 
+/* ---- The one hint (DESIGN "Hints", ui_hint.js) ---------------------------------------------------------------------
+   What a control says about itself, on the popups' floating material: it stands above its control and over the page,
+   out of the flow, so showing it, changing its words or hiding it moves nothing. A line of meaning in the meta ink (the
+   value's word primary), a rule line in the secondary ink, and at most one action in the accent ink. */
+.ui-hint {
+    position: absolute;
+    z-index: 1;
+    bottom: calc(100% + var(--space-2));
+    inset-inline-start: var(--ui-hint-shift, 0px);
+    box-sizing: border-box;
+    width: max-content;
+    max-width: min(28rem, calc(100vw - 4 * var(--space-2)));
+    max-width: min(28rem, 100cqi);
+    max-height: var(--ui-hint-room, none);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid transparent;
+    border-radius: var(--radius-lg);
+    background: var(--popup-float);
+    box-shadow: var(--elev-float);
+    -webkit-backdrop-filter: var(--glass);
+    backdrop-filter: var(--glass);
+    color: var(--text-meta);
+    font-family: var(--font-sans);
+    font-size: var(--type-meta);
+    font-weight: 500;
+    line-height: var(--line-meta);
+    letter-spacing: 0;
+    text-align: start;
+    white-space: normal;
+}
+.ui-hint[hidden], .ui-hint [hidden] { display: none; }
+.ui-hint[data-side="below"] { bottom: auto; top: calc(100% + var(--space-2)); }
+.ui-hint[data-cramped="true"] { overflow-y: auto; overscroll-behavior: contain; }
+.ui-hint-line, .ui-hint-rule { margin: 0; }
+.ui-hint-word { margin-inline-end: var(--space-2); color: var(--text-primary); font-weight: 600; }
+.ui-hint-rule { margin-top: 2px; color: var(--text-secondary); }
+.ui-hint-action {
+    display: block;
+    margin-top: var(--space-1);
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent-light);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+.ui-hint-action:focus-visible { outline: 2px solid var(--focus-accent-border); outline-offset: 2px; border-radius: var(--radius-sm); }
+.ui-hint:not([hidden]) { animation: ui-hint-in var(--motion-fade) var(--ease-sheet); }
+@keyframes ui-hint-in { from { opacity: 0; transform: translateY(3px); } }
+@media (prefers-reduced-motion: reduce) {
+    .ui-hint:not([hidden]) { animation: none; }
+}
+
 /* ---- Floating chrome ----------------------------------------------------------------------------------------------
    Controls that float over scrolling content (Main's header group) share one box: height, baseline and the pill
    corner; words, width, weight and tone stay the control's own (DESIGN §5). The group is invisible at rest and its

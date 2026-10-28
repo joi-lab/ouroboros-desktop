@@ -3,7 +3,7 @@
 // `api_chat` + `profile_id`; task actors serialize `api_model` +
 // `credential_profile_id`.
 
-import { accountRows, accountName } from './claudexor_status_store.js';
+import { accountRows, accountName, accountModelUnsupported } from './claudexor_status_store.js';
 import { formatRelativeAge } from './ui_helpers.js';
 import { escapeHtmlAttr as escapeHtml } from './utils.js';
 import { modelChooserHtml, updateModelChooserOptions } from './model_chooser.js';
@@ -533,8 +533,12 @@ export function routeChoiceGroups({
 // select that pins a route and the Accounts tab that lists the same account
 // call it one name. A second walk over `profiles.profiles` is how the pin
 // option came to say `codex-default` for the row Accounts calls by its email.
+// A refused pre-unified roster offers nothing: the rows beside that refusal are
+// the last unified read, served again, not this engine's accounts. A saved pin
+// still shows as a not-checked option (`profileOptionsFor`).
 export function indexProfilesByHarness(payload) {
     const byHarness = {};
+    if (accountModelUnsupported(payload)) return byHarness;
     for (const row of accountRows(payload)) {
         if (row.kind !== 'profile' || !row.profile_id) continue;
         (byHarness[row.harness] = byHarness[row.harness] || []).push({

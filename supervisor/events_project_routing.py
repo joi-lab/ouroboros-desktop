@@ -48,6 +48,46 @@ def _routing_project_address(ctx: Any, target: str, status: str) -> Dict[str, An
     return {}
 
 
+def _routing_notice_carried(status: str, cause: str, options: Any, attachment_manifest: Any) -> bool:
+    """Whether an ACK carries an owner notice: a refusal's cause, a picker or a file not attached."""
+    rejected = any(isinstance(row, dict) and row.get("status") == "rejected" for row in attachment_manifest or [])
+    return bool(cause) or rejected or (status == "needs_manual_target" and isinstance(options, list) and bool(options))
+
+
+def _routing_notice_reply(ctx: Any, evt: Dict[str, Any]) -> Dict[str, Any]:
+    """The owner message a routing notice answers, as its exact host Reply reference.
+
+    The retained owner row the act quotes for this receipt, else the owner source it
+    carries by value, else the accepted row its receipt id names. ``{}`` when none
+    resolves (a synthetic act, an unreadable store): an explicit "no owner row", which
+    keeps a task-keyed System row from borrowing its target task's own origin.
+    """
+    from ouroboros.chat_references import reference_from_row
+    from ouroboros.project_dialogue import (
+        AGENT_RECEIPT_ID_PREFIX,
+        owner_message_ref_is_valid,
+        resolve_owner_message_source,
+    )
+
+    client_message_id = str(evt.get("client_message_id") or "").strip()
+    try:
+        row = next((quote["owner_row"] for quote in evt.get("quotes") or []
+                    if client_message_id and isinstance(quote, dict) and isinstance(quote.get("owner_row"), dict)
+                    and str((quote.get("source") or {}).get("client_message_id") or "") == client_message_id), None)
+        source = evt.get("source_ref")
+        if row is None and owner_message_ref_is_valid(source) and (
+                not client_message_id or source["client_message_id"] == client_message_id):
+            row = resolve_owner_message_source(ctx.DRIVE_ROOT, source)
+        if row is None and client_message_id and not client_message_id.startswith(AGENT_RECEIPT_ID_PREFIX):
+            from supervisor.message_ingress import accepted_chat_message
+
+            row = accepted_chat_message(ctx.DRIVE_ROOT, int(evt.get("chat_id") or 0), client_message_id)
+        return reference_from_row(row) if row else {}
+    except Exception:
+        log.debug("Routing notice origin unavailable for %s", client_message_id, exc_info=True)
+        return {}
+
+
 def _emit_routing_receipt(
     ctx: Any,
     evt: Dict[str, Any],
@@ -130,10 +170,16 @@ def _emit_routing_receipt(
     }
     if attachment_manifest is not None:
         receipt["attachment_manifest"] = _events()._routing_attachments(attachment_manifest) or []
+    # The carrier SELECTED for the act's owner notice (never proof that a transport
+    # delivered it): the ACK when one carrying it was handed over; for a known refusal
+    # without one, the System row its path writes; "" when there is nothing to say.
+    receipt["routing_notice_carrier"] = "system" if cause and publish else ""
     if annotation_status == "failed":
+        # Fail closed: no ACK outruns its durable row, so a landed act reads unconfirmed
+        # and a picker is never clickable without its authority.
         return receipt
     if publish:
-        _publish_routing_ack(
+        carrier = _publish_routing_ack(
             ctx,
             evt,
             action=action,
@@ -145,6 +191,7 @@ def _emit_routing_receipt(
             cause=cause,
             reasoning_effort=reasoning_effort,
         )
+        receipt["routing_notice_carrier"] = carrier or receipt["routing_notice_carrier"]
     return receipt
 
 
@@ -160,8 +207,12 @@ def _publish_routing_ack(
     attachment_manifest: Optional[list] = None,
     cause: str = "",
     reasoning_effort: str = "",
-) -> None:
-    """Publish a live non-bubble acknowledgement after durable authority exists."""
+) -> str:
+    """Publish a live non-bubble acknowledgement after durable authority exists.
+
+    An ACK carrying the act's owner notice names itself its carrier and the owner
+    message it answers; the return is that carrier ("" for a quiet ACK or none sent).
+    """
     try:
         if target and not str(target_label or "").strip():
             from ouroboros.project_dialogue import routing_target_label
@@ -196,12 +247,17 @@ def _publish_routing_ack(
                 ack_kwargs["reasoning_effort"] = str(reasoning_effort)
             if str(evt.get("routing_token") or ""):
                 ack_kwargs["routing_token"] = str(evt.get("routing_token"))
+            carrier = "routing_ack" if _routing_notice_carried(status, cause, options, attachment_manifest) else ""
+            if carrier:
+                ack_kwargs.update(routing_notice_carrier=carrier, reply_to=_routing_notice_reply(ctx, evt))
             ack(
                 chat_id,
                 **ack_kwargs,
             )
+            return carrier
     except Exception:
         log.debug("Routing typed ack failed", exc_info=True)
+    return ""
 
 
 def _handle_project_digest(evt: Dict[str, Any], ctx: Any) -> None:
@@ -445,14 +501,14 @@ def _promote_chat_to_task_outcome(evt: Dict[str, Any], ctx: Any) -> Dict[str, An
                 blocked["never_admitted"] = True
             if blocked["reason"] != "duplicate_task_id" or _own_emitted_stub(ctx, task_id, routing_token):
                 _persist_promote_rejection(ctx, evt, blocked)
-            _emit_routing_receipt(
+            blocked["_routing_notice_carrier"] = _emit_routing_receipt(
                 ctx,
                 evt,
                 action=receipt_action,
                 target=task_id,
                 status="needs_manual_target",
                 reason=blocked["reason"],
-            )
+            )["routing_notice_carrier"]
             ctx.append_jsonl(
                 ctx.DRIVE_ROOT / "logs" / "supervisor.jsonl",
                 {
@@ -606,9 +662,10 @@ def _promote_chat_to_task_outcome(evt: Dict[str, Any], ctx: Any) -> Dict[str, An
 
         if outcome.get("admission_started"):
             outcome["status"] = "unconfirmed"
-            _emit_routing_receipt(ctx, evt, action=receipt_action, target=task_id,
-                                  status="unconfirmed", reason=str(outcome.get("reason") or ""),
-                                  detail="Admission persistence is unconfirmed; task resources were retained.")
+            outcome["_routing_notice_carrier"] = _emit_routing_receipt(
+                ctx, evt, action=receipt_action, target=task_id,
+                status="unconfirmed", reason=str(outcome.get("reason") or ""),
+                detail="Admission persistence is unconfirmed; task resources were retained.")["routing_notice_carrier"]
             return outcome
         _rollback_promoted_pending(
             ctx,
@@ -620,7 +677,7 @@ def _promote_chat_to_task_outcome(evt: Dict[str, Any], ctx: Any) -> Dict[str, An
         if (outcome.get("never_admitted") or str(outcome.get("reason") or "") != "attachment_admission_rejected"
                 or _own_emitted_stub(ctx, task_id, routing_token)):
             _persist_promote_rejection(ctx, evt, outcome)
-        _emit_routing_receipt(
+        outcome["_routing_notice_carrier"] = _emit_routing_receipt(
             ctx,
             evt,
             action=receipt_action,
@@ -629,7 +686,7 @@ def _promote_chat_to_task_outcome(evt: Dict[str, Any], ctx: Any) -> Dict[str, An
             reason=str(outcome.get("reason") or "admission_rejected"),
             detail=str(outcome.get("detail") or ""),
             attachment_manifest=_events()._routing_attachments(outcome.get("attachment_manifest")),
-        )
+        )["routing_notice_carrier"]
         ctx.append_jsonl(
             ctx.DRIVE_ROOT / "logs" / "supervisor.jsonl",
             {
@@ -661,7 +718,7 @@ def _promote_chat_to_task_outcome(evt: Dict[str, Any], ctx: Any) -> Dict[str, An
             "status": "unconfirmed", "reason": "promotion_persistence_failed", "task_id": task_id,
             "detail": f"{type(exc).__name__}: {exc}",
         }
-        _emit_routing_receipt(
+        failed_outcome["_routing_notice_carrier"] = _emit_routing_receipt(
             ctx,
             evt,
             action=receipt_action,
@@ -669,7 +726,7 @@ def _promote_chat_to_task_outcome(evt: Dict[str, Any], ctx: Any) -> Dict[str, An
             status="unconfirmed",
             reason="promotion_persistence_failed",
             detail=f"{type(exc).__name__}: {exc}",
-        )
+        )["routing_notice_carrier"]
         ctx.append_jsonl(
             ctx.DRIVE_ROOT / "logs" / "supervisor.jsonl",
             {
@@ -682,7 +739,7 @@ def _promote_chat_to_task_outcome(evt: Dict[str, Any], ctx: Any) -> Dict[str, An
         return failed_outcome
 
 
-def _notify_host_initiated_refusal(ctx: Any, evt: Dict[str, Any], outcome: Any) -> None:
+def _notify_host_initiated_refusal(ctx: Any, evt: Dict[str, Any], outcome: Any, carrier: str = "") -> None:
     """The ONE place a HOST-issued promote (skill card, Swarm, picker click)
     tells the owner it did not start (Q2=A). No model turn narrates such a
     refusal, so exactly one typed System row lands in the chat the OWNER wrote
@@ -690,6 +747,10 @@ def _notify_host_initiated_refusal(ctx: Any, evt: Dict[str, Any], outcome: Any) 
     to a new room — bound to the task that never started. A tool-issued promote
     gets nothing here (its receipt plus the failed call are the record and the
     model narrates); preparing, scheduled and replayed outcomes send nothing.
+    The row names the carrier its act's receipt selected: ``routing_ack`` when
+    the ACK already carried the notice (a transport showing ACKs skips this
+    copy), otherwise ``system``. It replies to the owner's message, never to
+    the unstarted task's own origin.
     """
     if not evt.get("host_initiated") or not isinstance(outcome, dict) or outcome.get("replayed"):
         return
@@ -715,6 +776,8 @@ def _notify_host_initiated_refusal(ctx: Any, evt: Dict[str, Any], outcome: Any) 
             chat, f"{title} · {routing_refusal_cause(action, status, reason, None)}", role="system",
             system_type="task_start_unconfirmed" if status == "unconfirmed" else "task_not_started",
             task_id=str(outcome.get("task_id") or evt.get("task_id") or ""),
+            progress_meta={"routing_notice_carrier": "routing_ack" if carrier == "routing_ack" else "system",
+                           "reply_to": _routing_notice_reply(ctx, evt)},
         )
     except Exception:
         log.debug("host-initiated refusal row failed for %s", evt.get("task_id"), exc_info=True)
@@ -725,7 +788,8 @@ def _handle_promote_chat_to_task(evt: Dict[str, Any], ctx: Any) -> Dict[str, Any
     body — the reservation-blocked and unconfirmed early returns included —
     passes the host-initiated refusal notice before it is returned."""
     outcome = _promote_chat_to_task_outcome(evt, ctx)
-    _notify_host_initiated_refusal(ctx, evt, outcome)
+    carrier = outcome.pop("_routing_notice_carrier", "") if isinstance(outcome, dict) else ""
+    _notify_host_initiated_refusal(ctx, evt, outcome, carrier)
     return outcome
 
 

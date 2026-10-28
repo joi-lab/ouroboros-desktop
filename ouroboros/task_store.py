@@ -10,7 +10,7 @@ projections (a tool claim, a model wait, a retired consumer) without a body writ
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 from ouroboros import store, store_task_cards
 from ouroboros.store import Txn, open_store
@@ -450,61 +450,119 @@ def task_ids(root: Any) -> List[str]:
         return txn.task_ids()
 
 
-def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
-               queue_rows: Iterable[dict] = ()) -> Dict[str, dict]:
-    """Typed membership; only underived roots need their legacy body.
+class TreeCensus(NamedTuple):
+    """One tree's membership read (``tree_facts``): ``members`` by task id, and ``unresolved``, each
+    row whose own record could not be read, as ``{"reason", "linked"}``. A member reached by ancestry
+    is in both: its membership is proven, its own record is still unknown."""
+    members: Dict[str, dict]
+    unresolved: Dict[str, dict]
 
-    Descendant selection closes over the indexed parent chain, including bridges
-    present only in the queue snapshot. Durable rows win over queue rows. The
-    caller still applies its own depth/ancestry rule to this selected superset.
+
+_TREE_ROW = ("task_id", "status", "parent_task_id", "root_task_id", "retry_task_id", "superseded_by")
+_TREE_SQL = ",".join(f"t.{name}" for name in _TREE_ROW)
+_LINKS = ("parent_task_id", "retry_task_id", "superseded_by")
+
+
+def _validated(tree_id: str, selected: Dict[str, dict], captured: list) -> Tuple[dict, dict, dict]:
+    """``(members, rows, faults)`` once each CAPTURED body is validated as its own row's object:
+    ``rows`` hold the root each captured row may be read with (``None``: unknown)."""
+    from ouroboros.store_hot_facts import lineage_root, own_document
+
+    members, rows, faults = dict(selected), {}, {}
+    for record in captured:
+        tid, row = record["task_id"], {name: record[name] for name in _TREE_ROW}
+        document, fault = own_document(tid, record["body"])
+        if fault:
+            faults[tid], row["root_task_id"] = fault, None
+            members.pop(tid, None)  # a flagged row's typed root may be another task's
+        elif row["root_task_id"] is None:
+            row["root_task_id"] = lineage_root(document)
+            if row["root_task_id"] == tree_id:
+                members[tid] = row
+        rows[tid] = row
+    return members, rows, faults
+
+
+def _tied(tree_id: str, members: Dict[str, dict], rows: Dict[str, dict], faults: Dict[str, str],
+          ties: set) -> Dict[str, dict]:
+    """Each fault, ``linked`` when it is a member or typed edges to or from this tree or TIES tie it."""
+    tied = {tid for tid in faults if tid == tree_id or tid in ties or tid in members}
+    while True:
+        known = {tree_id, *members, *tied}
+        named = {row.get(link) for row in (*members.values(), *(rows[tid] for tid in tied)) for link in _LINKS}
+        more = {tid for tid in faults.keys() - tied if tid in named or {rows[tid][link] for link in _LINKS} & known}
+        if not more:
+            return {tid: {"reason": fault, "linked": tid in tied} for tid, fault in sorted(faults.items())}
+        tied |= more
+
+
+def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
+               queue_rows: Iterable[dict] = (), linked: Iterable[str] = ()) -> TreeCensus:
+    """Typed membership; a row whose root rests on its own record is validated alone.
+
+    The indexed root column selects the tree. An underived (NULL) root, and this tree's
+    flagged row (``control_valid=0``: a bad status, or an older job's columns from another
+    task's body), counts once its body is its own object, rooted by ``store_hot_facts.lineage_root``.
+    A missing, unparsable, non-object or other task's body leaves that ROW unresolved, never the
+    census: ``linked`` when a typed parent/retry/supersession edge to or from this tree, a handoff
+    naming it or a caller's ``linked`` id (queue, custody, model request) ties it here; otherwise
+    a named gap, neither member nor proof of absence. A store failure raises. Bodies are decoded
+    after the read, unless descendant anchors need them within it (one snapshot either way).
+    Descendant selection closes over the indexed parent chain, including bridges present only in
+    the queue snapshot; a row reached so is a member by ancestry, and a damaged one stays named
+    (linked) beside it. Durable rows win over queue rows. The caller still applies its own
+    depth/ancestry rule to this selected superset.
     """
-    from ouroboros.store_hot_facts import task_columns
+    from ouroboros.store_hot_facts import VERSION
 
     tree_id = str(tree_id)
     with open_store(root, write=False) as txn:
-        legacy = {}
-        for record in txn.conn.execute(
-                "SELECT t.task_id,t.status,t.parent_task_id,b.body FROM tasks AS t "
-                "JOIN task_bodies AS b ON b.task_id=t.task_id WHERE t.root_task_id IS NULL"):
-            document = json.loads(record["body"])
-            legacy[record["task_id"]] = {"task_id": record["task_id"], "status": record["status"],
-                "parent_task_id": record["parent_task_id"], "root_task_id": task_columns(document)["root_task_id"]}
+        flagged = int(txn.meta("schema_version") or VERSION) >= VERSION  # control_valid exists
+        captured = txn.conn.execute(
+            f"SELECT {_TREE_SQL},b.body FROM tasks AS t LEFT JOIN task_bodies AS b ON b.task_id=t.task_id "
+            "WHERE t.root_task_id IS NULL" + (" OR (t.root_task_id=? AND t.control_valid=0)" if flagged else ""),
+            (tree_id,) if flagged else ()).fetchall()
         selected = {row["task_id"]: dict(row) for row in txn.conn.execute(
-            "SELECT task_id,status,parent_task_id,root_task_id FROM tasks WHERE root_task_id=?", (tree_id,))}
-        selected.update({tid: row for tid, row in legacy.items() if row["root_task_id"] == tree_id})
-        if not descendants:
-            return selected
-        queued = {}
-        for row in queue_rows:
-            tid = str(row.get("task_id") or row.get("id") or "")
-            if tid:
-                queued.setdefault(tid, row)
-        # A queue record cannot replace a durable row, even when that row is
-        # outside the selected tree. This addressed read preserves that rule.
-        durable_queue = {row["task_id"]: dict(row) for row in txn.conn.execute(
-            "SELECT task_id,status,parent_task_id,root_task_id FROM tasks "
-            "WHERE task_id IN (SELECT value FROM json_each(?))", (json.dumps(list(queued)),))}
-        queued.update({tid: legacy.get(tid, row) for tid, row in durable_queue.items()})
-        anchors = {tree_id, *selected}
-        while True:
-            rows = txn.conn.execute(
-                "WITH RECURSIVE reach(id) AS (SELECT value FROM json_each(?) UNION "
-                "SELECT t.task_id FROM tasks AS t JOIN reach ON t.parent_task_id=reach.id) "
-                "SELECT task_id,status,parent_task_id,root_task_id FROM tasks "
-                "WHERE task_id IN (SELECT id FROM reach)", (json.dumps(sorted(anchors)),)).fetchall()
-            selected.update({row["task_id"]: legacy.get(row["task_id"], dict(row)) for row in rows})
-            reached = {tree_id, *selected}
+            f"SELECT {_TREE_SQL} FROM tasks AS t WHERE t.root_task_id=?", (tree_id,))}
+        ties = {*map(str, linked), *(row[0] for row in txn.conn.execute(  # a damaged handoff ties nothing
+            "SELECT task_id FROM task_handoffs WHERE task_id IN (SELECT value FROM json_each(?)) AND "
+            "CASE WHEN json_valid(facts) THEN json_extract(facts, '$.root_task_id') END=?",
+            (json.dumps([r["task_id"] for r in captured]), tree_id)))}
+        if descendants:
+            members, rows, faults = _validated(tree_id, selected, captured)
+            queued = {}
+            for row in queue_rows:
+                tid = str(row.get("task_id") or row.get("id") or "")
+                if tid:
+                    queued.setdefault(tid, row)
+            # A queue record cannot replace a durable row, even when that row is
+            # outside the selected tree. This addressed read preserves that rule.
+            durable_queue = {row["task_id"]: dict(row) for row in txn.conn.execute(
+                f"SELECT {_TREE_SQL} FROM tasks AS t "
+                "WHERE t.task_id IN (SELECT value FROM json_each(?))", (json.dumps(list(queued)),))}
+            queued.update({tid: rows.get(tid, row) for tid, row in durable_queue.items()})
+            anchors = {tree_id, *members}
             while True:
-                extra = {tid for tid, row in queued.items() if tid not in reached and (
-                    str(row.get("root_task_id") or "") == tree_id or str(row.get("parent_task_id") or "") in reached)}
-                if not extra:
-                    break
-                reached.update(extra)
-            new = reached - anchors - selected.keys()
-            selected.update({tid: row for tid, row in queued.items() if tid in reached and tid not in selected})
-            if not new:
-                return selected
-            anchors.update(reached)
+                reach = txn.conn.execute(
+                    "WITH RECURSIVE reach(id) AS (SELECT value FROM json_each(?) UNION "
+                    "SELECT t.task_id FROM tasks AS t JOIN reach ON t.parent_task_id=reach.id) "
+                    f"SELECT {_TREE_SQL} FROM tasks AS t "
+                    "WHERE t.task_id IN (SELECT id FROM reach)", (json.dumps(sorted(anchors)),)).fetchall()
+                members.update({row["task_id"]: rows.get(row["task_id"], dict(row)) for row in reach})
+                reached = {tree_id, *members}
+                while True:
+                    extra = {tid for tid, row in queued.items() if tid not in reached and (
+                        str(row.get("root_task_id") or "") == tree_id or str(row.get("parent_task_id") or "") in reached)}
+                    if not extra:
+                        break
+                    reached.update(extra)
+                new = reached - anchors - members.keys()
+                members.update({tid: row for tid, row in queued.items() if tid in reached and tid not in members})
+                if not new:
+                    return TreeCensus(members, _tied(tree_id, members, rows, faults, ties))
+                anchors.update(reached)
+    members, rows, faults = _validated(tree_id, selected, captured)
+    return TreeCensus(members, _tied(tree_id, members, rows, faults, ties))
 
 
 _COLLECTION_BATCH = 64  # bounds selection/materialization and one classification commit

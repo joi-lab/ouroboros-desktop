@@ -350,9 +350,13 @@ def retain_consumed_selection(task: dict, pause_row: dict) -> bool:
 
 
 def resume_outcome(outcome: dict) -> dict:
-    """Ordinary words beside typed refusals, shared by HTTP and both mind doors."""
+    """Ordinary words beside typed refusals, shared by HTTP and both mind doors; an accepted
+    Resume also names the damaged records its Pause did not wait for (``membership_gaps``)."""
     if outcome.get("ok"):
-        return outcome
+        if not outcome.get("membership_gaps"):
+            return outcome
+        from ouroboros.pause_notices import gap_words
+        return {**outcome, "message": "Resume accepted." + gap_words(outcome["membership_gaps"])}
     if outcome.get("runs") and not outcome.get("blockers"):
         outcome = {**outcome, "blockers": [{"kind": "delegated_run", **run} for run in outcome["runs"]]}
     error = str(outcome.get("error") or "")

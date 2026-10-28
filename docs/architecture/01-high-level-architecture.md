@@ -137,7 +137,7 @@ ouroboros/ — agent core and shared runtime (§6)
   project_naming.py — admission names, bounded Light naming with fallback, card conversion and lazy turn naming (§7)
   ui_translation.py — one translation worker, accounted Light batches and free-text language resolution (`language_needs_model`; §7)
   ui_language.py, i18n_memory.py — the interface-language fact and one translation memory per language, `state/i18n/<tag>.json`: owner > imported > generated (§7)
-  loop_tool_execution.py, tool_call_log.py — tool dispatch, results, per-invocation counting
+  loop_tool_execution.py, tool_call_log.py, late_tool_results.py — tool dispatch, results, per-invocation counting
   deadline_utils.py — deadline parsing and the transport-vs-logical wait seam
   observability.py, source_retention.py — private CAS: equal histories stored once, gzip-1, hardlinks (§10)
   evidence_packs.py, evidence_packer.py — per-task xz packs (maintenance job, §5); verified addressed reads, missing ≠ `evidence_corrupt` (PERSISTENCE)

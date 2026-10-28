@@ -417,6 +417,7 @@ D20 = "Presence"
 "ouroboros/loop_llm_call.py" = "D01"
 "ouroboros/loop_tool_execution.py" = "D01"
 "ouroboros/tool_call_log.py" = "D01"
+"ouroboros/late_tool_results.py" = "D01"
 "ouroboros/loop_transport.py" = "D01"
 "ouroboros/main_context_authority.py" = "D03"
 "ouroboros/marketplace/__init__.py" = "D14"
@@ -687,6 +688,7 @@ D20 = "Presence"
 "ouroboros/tool_access_types.py" = "D04"
 "ouroboros/tool_access_user_files.py" = "D04"
 "ouroboros/tool_capabilities.py" = "D04"
+"ouroboros/tool_connections.py" = "D04"
 "ouroboros/tool_result_delivery.py" = "D01"
 "ouroboros/tool_result_record.py" = "D03"
 "ouroboros/tool_policy.py" = "D04"
@@ -1206,6 +1208,8 @@ lazy_only = [
   "D03->D16",
   "D03->D20",
   "D04->D01",
+  "D04->D02",
+  "D04->D03",
   "D04->D06",
   "D04->D07",
   "D04->D09",
