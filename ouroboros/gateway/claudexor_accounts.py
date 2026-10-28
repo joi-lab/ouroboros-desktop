@@ -779,7 +779,7 @@ def _login_create(body: Dict[str, Any]) -> Dict[str, Any]:
         # this FIRST create with its structural pre-command missing-binary
         # terminal job, install that vendor CLI once and create the job once
         # more; a second refusal is returned, never looped.
-        from ouroboros.claudexor_daemon import (
+        from ouroboros.claudexor_harness_install import (
             install_missing_harness_cli,
             is_immediate_missing_cli_job,
         )

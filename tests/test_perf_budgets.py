@@ -252,7 +252,7 @@ def _install_ledger_read_counters(monkeypatch):
     counters: dict = {"migrations": [], "full_reads": [], "projections": [], "breakdowns": []}
     real_migrate = usage_store.migrate_from_journal
     real_full_read = usage_store.read_usage_records
-    real_attempts = usage_store.Txn.attempts
+    real_attempts, real_attempt_rows = usage_store.Txn.attempts, usage_store.Txn.attempt_rows
     real_projection = ua.usage_projection
     real_breakdown = ua.usage_breakdown
 
@@ -269,6 +269,11 @@ def _install_ledger_read_counters(monkeypatch):
             counters["full_reads"].append(str(txn.root))
         return real_attempts(txn, where, params)
 
+    def counted_attempt_rows(txn, where="1", params=()):
+        if str(where).strip() == "1":  # the same scan, captured in one step
+            counters["full_reads"].append(str(txn.root))
+        return real_attempt_rows(txn, where, params)
+
     def counted_projection(*args, **kwargs):
         counters["projections"].append(kwargs)
         return real_projection(*args, **kwargs)
@@ -280,6 +285,7 @@ def _install_ledger_read_counters(monkeypatch):
     monkeypatch.setattr(usage_store, "migrate_from_journal", counted_migration)
     monkeypatch.setattr(usage_store, "read_usage_records", counted_full_read)
     monkeypatch.setattr(usage_store.Txn, "attempts", counted_attempts)
+    monkeypatch.setattr(usage_store.Txn, "attempt_rows", counted_attempt_rows)
     monkeypatch.setattr(ua, "usage_projection", counted_projection)
     monkeypatch.setattr(ua, "usage_breakdown", counted_breakdown)
     return counters

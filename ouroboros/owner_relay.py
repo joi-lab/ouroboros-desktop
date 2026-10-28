@@ -70,13 +70,55 @@ def retain_owner_message(ctx, row=None, *, client_message_id="") -> None:
 
 
 def persist_held_state(ctx) -> None:
-    """Retain sources and return addresses on an existing canonical task record."""
-    if getattr(ctx, "task_id", "") and getattr(ctx, "drive_root", None):
-        from ouroboros.task_store import patch_document
-        from ouroboros.tool_access import canonical_data_root
-        patch_document(canonical_data_root(ctx), ctx.task_id, lambda current: {
-            **current, "held_owner_messages": copy.deepcopy(getattr(ctx, "_held_owner_messages", {})),
-            "open_relays": copy.deepcopy(getattr(ctx, "_open_relays", {}))} if current else None)
+    """Retain sources and return addresses on an existing canonical task record.
+
+    The context's own maps are the turn's authority; the record is their durable copy for a
+    later Continue. Maps this context already persisted open no write transaction at all (the
+    write gate is the convoy's own contention point); a record that already holds them is not
+    rewritten. A store too busy to
+    take the write (``StoreBusy`` after a confirmed rollback: a reader convoy, never a lost
+    write) must not fail the owner's turn over bookkeeping: the maps stay, the gap is logged
+    once and marked, and the next persist or the loop's terminal save carries them. Other
+    store errors still raise.
+    """
+    if not (getattr(ctx, "task_id", "") and getattr(ctx, "drive_root", None)):
+        return
+    from ouroboros.store import StoreBusy
+    from ouroboros.task_store import patch_document
+    from ouroboros.tool_access import canonical_data_root
+    held = copy.deepcopy(getattr(ctx, "_held_owner_messages", None) or {})
+    relays = copy.deepcopy(getattr(ctx, "_open_relays", None) or {})
+    if getattr(ctx, "_held_state_persisted", None) == (held, relays) and not getattr(ctx, "_held_state_dirty", False):
+        return
+
+    def _mutate(current):
+        if not current or (current.get("held_owner_messages") == held and current.get("open_relays") == relays):
+            return None  # nothing to write: an unchanged record is not rewritten
+        return {**current, "held_owner_messages": held, "open_relays": relays}
+
+    try:
+        patch_document(canonical_data_root(ctx), ctx.task_id, _mutate)
+    except StoreBusy as exc:
+        if getattr(exc, "rollback_confirmed", False) is not True:
+            raise
+        if not getattr(ctx, "_held_state_dirty", False):
+            logging.getLogger(__name__).warning(
+                "Held owner sources of %s not persisted (store busy, %s); kept in memory until the next "
+                "persist or the terminal save", ctx.task_id, exc.reason)
+        ctx._held_state_dirty = True
+        return
+    ctx._held_state_dirty = False
+    ctx._held_state_persisted = (held, relays)
+
+
+def flush_held_state(ctx) -> None:
+    """Carry a held state a busy store refused earlier (``working_checkpoint.save_terminal``)."""
+    if getattr(ctx, "_held_state_dirty", False):
+        try:
+            persist_held_state(ctx)
+        except Exception:
+            logging.getLogger(__name__).warning("Held owner sources of %s still unpersisted at the terminal save",
+                                                getattr(ctx, "task_id", ""), exc_info=True)
 
 
 def quote_rows(ctx, handles) -> tuple[list, str]:

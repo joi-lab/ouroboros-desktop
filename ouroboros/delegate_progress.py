@@ -665,6 +665,22 @@ def emit(ctx: Any, run_id: str, advance: _Advance, *,
         log.debug("delegated progress emit failed", exc_info=True)
 
 
+def emit_stream(ctx: Any, run_id: str, read: Any, *, after_seq: int) -> None:
+    """Push the events of one journal read the wait made itself (``delegate_observe.step``)
+    to the live progress surface, each frame committed once handed over; a broken channel
+    never aborts the wait."""
+    fn = getattr(ctx, "emit_progress_fn", None)
+    if not callable(fn):
+        return
+    from ouroboros import delegate_activity
+    try:
+        for activity, commit in delegate_activity.stream_observations(ctx, run_id, read, after=after_seq):
+            fn(delegate_activity.progress_text(activity), delegated_activity=activity)
+            commit()
+    except Exception:
+        log.debug("delegated stream emit failed", exc_info=True)
+
+
 def emit_retained(ctx: Any, run_id: str) -> None:
     """Retry local activity delivery without delaying a ready result on transport."""
     fn = getattr(ctx, "emit_progress_fn", None)

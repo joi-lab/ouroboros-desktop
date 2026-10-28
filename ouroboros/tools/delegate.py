@@ -1110,6 +1110,8 @@ def _delegate_wait(ctx: ToolContext, run_id: str, wait_sec: Optional[int] = None
     # (an old row, an unknown run) stay null — never invented.
     _started_ts, _run_max_seconds = custody.run_timing(custody.custody_root(ctx), rid)
     _started_at = parse_deadline_ts(_started_ts)
+    _elapsed = lambda: None if _started_at is None else max(0, int(  # noqa: E731
+        (_dt.datetime.now(tz=_dt.timezone.utc) - _started_at).total_seconds()))
     # The idle-rail lease for THIS hold: granted before the loop, released in the
     # finally below — the supervisor's idle enforcer spares a leased task while
     # every other rail (deadline, ceiling, budget, cancel) still cuts through.
@@ -1126,11 +1128,17 @@ def _delegate_wait(ctx: ToolContext, run_id: str, wait_sec: Optional[int] = None
             gateway = ClaudexorGateway()
         if not getattr(gateway, "engine_version", ""):
             gateway.handshake(timeout_sec=progress.poll_bound(read_window()))
+        step = None
         if observation_only:
             _emit_external_wait_lease(
                 ctx, rid, _external_wait_lease_until(ctx, read_window(), _started_at, _run_max_seconds),
                 lease_id=_lease_id)
-        detail = progress.bounded_poll(gateway, rid, read_window())
+            from ouroboros import delegate_observe  # speech from the journal, attention from the engine
+            step = delegate_observe.step(ctx, gateway, rid, window=window, since_seq=since_seq, read_window=read_window,
+                                         elapsed_seconds=_elapsed(), max_seconds=_run_max_seconds or None)
+            if step is not None and step.payload is not None:
+                return step.payload  # a quiet beat: nothing needed the detail
+        detail = step.detail if step is not None else progress.bounded_poll(gateway, rid, read_window())
         baseline = int(since_seq) if since_seq is not None else int(detail.get("lastSeq") or 0)
         seen = progress.WindowObservations()
         seen.observe_baseline(detail, baseline)
@@ -1177,9 +1185,7 @@ def _delegate_wait(ctx: ToolContext, run_id: str, wait_sec: Optional[int] = None
                 payload = progress.window_payload(
                     run_id=rid, state=state, last_seq=last_seq,
                     window=(time.monotonic() - started) if observation_only else window,
-                    elapsed_seconds=(None if _started_at is None else max(0, int(
-                        (_dt.datetime.now(tz=_dt.timezone.utc) - _started_at).total_seconds()))),
-                    max_seconds=_run_max_seconds or None,
+                    elapsed_seconds=_elapsed(), max_seconds=_run_max_seconds or None,
                     waiting_on_user=bool(summary.get("waitingOnUser")) or bool(pending),
                     pending_interactions=_bounded_interactions(pending) if pending else None,
                     detail=detail, seen=seen,
@@ -1191,15 +1197,11 @@ def _delegate_wait(ctx: ToolContext, run_id: str, wait_sec: Optional[int] = None
                     time.sleep(max(0.0, deadline - time.monotonic()))
                 return _expired()
             time.sleep(min(_POLL_INTERVAL_SEC, max(0.0, deadline - time.monotonic())))
-            # BOUNDED whether or not the window is spent: a poll STARTED a moment before
-            # expiry still carries the client's 60s read default, so the clamp bounded the
-            # sleeping and not the waiting. What an UNANSWERED one MEANS is what differs.
-            # The last poll of a spent window is bounded and never skipped — terminal
-            # state and breach are judged on fresh data or not at all — and a daemon too
-            # slow to answer THAT one is this window's expiry. Earlier, the window still
-            # has time and there is no expiry to report: the typed refusal propagates to
-            # the handler below, because a daemon that died mid-window relayed as a quiet
-            # completed wait is a fabricated duration on top of a run nobody is watching.
+            # BOUNDED whether or not the window is spent (the clamp must bound the waiting,
+            # not only the sleeping). The last poll of a spent window is bounded and never
+            # skipped — terminal state and breach are judged on fresh data or not at all —
+            # and a daemon too slow to answer it is this window's expiry; earlier, the typed
+            # refusal propagates — a daemon that died mid-window is no quiet completed wait.
             left = deadline - time.monotonic()
             fresh = (progress.expiring_poll(gateway, rid) if left <= 0
                      else progress.bounded_poll(gateway, rid, left))

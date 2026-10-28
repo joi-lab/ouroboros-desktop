@@ -10,15 +10,25 @@ projections (a tool claim, a model wait, a retired consumer) without a body writ
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Tuple
+import sqlite3
+from typing import Any, Callable, Dict, Iterable, Iterator, List, NamedTuple, Optional, Tuple
 
 from ouroboros import store, store_task_cards
 from ouroboros.store import Txn, open_store
+from ouroboros.store_capture import Captured, capture
 
 FACT_KEYS = ("task_id", "status", "ts", "updated_at", "delegation_role", "parent_task_id", "project_id", "root_task_id",
              "child_drive_root", "headless_child_drive_root", "superseded_by", "retry_task_id",
              "presence_binding_id", "presence_authority_recorded")
 _NEWEST_ORDER = "ORDER BY ts DESC, task_id DESC"  # NULL ts sorts last: a row without one is oldest
+_PAGE = 256  # documents per body capture: one aggregate far below SQLite's string limit at stored body sizes;
+# a page past that limit halves (``_fetch``). A physical bound, not a policy.
+
+
+def _newest(column: str) -> Callable[[Dict[str, Any]], tuple]:
+    """``ORDER BY <column> DESC, task_id DESC`` (``_NEWEST_ORDER`` for ``ts``) restored after a capture
+    (sorted with ``reverse``): a NULL ``column`` last."""
+    return lambda record: (record[column] is not None, record[column] or "", record["task_id"])
 
 
 def read_document(root: Any, task_id: str, *, txn: Optional[Txn] = None, signed: bool = False) -> Any:
@@ -79,9 +89,10 @@ def terminal_writes_since(root: Any, counter: int) -> List[str]:
     in that order, through the ``tasks_terminal_seq`` index: what a pass keyed on the counter looks at
     again, never the rows it did not move."""
     with open_store(root, write=False) as txn:
-        return [record["task_id"] for record in txn.conn.execute(
-            "SELECT task_id FROM tasks INDEXED BY tasks_terminal_seq WHERE terminal_seq>? ORDER BY terminal_seq, task_id",
-            (int(counter),))]
+        captured = capture(txn.conn, "SELECT task_id, terminal_seq FROM tasks INDEXED BY tasks_terminal_seq "
+                           "WHERE terminal_seq>?", (int(counter),), ("task_id", "terminal_seq"))
+    ordered = captured.rows(key=lambda record: (record["terminal_seq"], record["task_id"]))
+    return [record["task_id"] for record in ordered]
 
 
 def delete_document(root: Any, task_id: str) -> bool:
@@ -107,23 +118,69 @@ def patch_document(root: Any, task_id: str, mutator: Callable[[Dict[str, Any]], 
     return seen.get("current", {}) if updated is None else {**updated, "task_id": task_id}
 
 
-def _fetch(txn: Txn, where: str = "", params: Iterable[Any] = (), order: str = "ORDER BY t.task_id") -> Tuple[list, list]:
-    """The matching rows and their handoff rows as stored (text): all the store is held for.
-    A reader decodes AFTER its transaction closed (``_decode``), so a writer's COMMIT never
-    waits behind a listing's ``json.loads``."""
+def _fetch(txn: Txn, where: str = "", params: Iterable[Any] = ()) -> List[Tuple[Captured, Captured]]:
+    """The matching rows (id, body, card columns) and their handoff rows as stored, captured inside the
+    caller's read transaction (one snapshot; ``store_capture``): all the store is held for. A reader decodes
+    AFTER its transaction closed (``_documents``), so a writer's COMMIT never waits behind a listing's
+    ``json.loads`` or a row-by-row step. The selected ids come first (ids only), then bodies and handoff
+    rows by pages of ids: every body of a store in one aggregate would pass SQLite's string limit."""
     clause = f"WHERE {where}" if where else ""
     cards, join = store_task_cards.select(txn)
-    rows = txn.conn.execute(
-        f"SELECT b.body, t.*{cards} FROM tasks AS t JOIN task_bodies AS b ON b.task_id = t.task_id{join} {clause} {order}",
-        tuple(params)).fetchall()
-    return rows, txn.handoff_records([record["task_id"] for record in rows])
+    tables = f"FROM tasks AS t JOIN task_bodies AS b ON b.task_id = t.task_id{join}"
+    # ``write_seq`` is in no index: the selection reads the rows it selects, as the listing always did, so the planner
+    # keeps the WHERE's index; an id-only select can scan a covering index of every task instead once ANALYZE
+    # statistics make that look cheaper (tests/test_cost_contract.py B7).
+    selected = capture(txn.conn, f"SELECT t.task_id, t.write_seq {tables} {clause}", params, ("task_id", "write_seq"))
+    ids = sorted(row[0] for row in selected.tuples())
+    columns = ("task_id", "body", *(store_task_cards.FIELDS if join else ()))
+    select = f"SELECT t.task_id, b.body{cards} {tables} WHERE t.task_id IN (SELECT value FROM json_each(?))"
+    return [(rows, _handoff_capture(txn, page)) for page, rows in _pages(txn, ids, select, columns)]
 
 
-def _decode(rows: list, handoff_records: list) -> List[Dict[str, Any]]:
-    """The documents of ``_fetch``'s rows: each row carries its body and its card columns."""
-    handoffs = store.decode_handoffs([record["task_id"] for record in rows], handoff_records)
-    return [store_task_cards.project(store.project_handoffs(json.loads(record["body"]), handoffs[record["task_id"]]), record)
-            for record in rows]
+def _pages(txn: Txn, ids: List[str], select: str, columns: Tuple[str, ...]) -> Iterator[Tuple[str, Captured]]:
+    """``(ids page, capture)`` of SELECT (one ``?``: a JSON array of task ids) over IDS in pages of ``_PAGE``,
+    inside the caller's read (one snapshot): the bodies of many tasks in one aggregate could pass SQLite's string
+    limit. A page past it halves; one document past it, or a NOMEM that rolled the read back, raises (the store
+    types it), never an answer without that row."""
+    start, size = 0, _PAGE
+    while start < len(ids):
+        page = json.dumps(ids[start:start + size])
+        try:
+            rows = capture(txn.conn, select, (page,), columns)
+        except (sqlite3.DataError, MemoryError):  # past SQLite's string limit: the same ids in smaller pages,
+            if size == 1 or not txn.conn.in_transaction:  # in the same snapshot (a NOMEM may have rolled it back)
+                raise
+            size = max(1, size // 2)
+            continue
+        yield page, rows
+        start += size
+
+
+def _handoff_capture(txn: Txn, ids_json: str) -> Captured:
+    """The handoff rows of the tasks ``ids_json`` names, as stored, in ONE step (decoded after release)."""
+    return capture(txn.conn, "SELECT rowid AS seq, task_id, kind, op_id, facts FROM task_handoffs WHERE task_id IN "
+                   "(SELECT value FROM json_each(?))", (ids_json,), ("seq", "task_id", "kind", "op_id", "facts"))
+
+
+def _handoff_records(captured: Captured) -> List[Dict[str, Any]]:
+    """``Txn.handoff_records``' rows from a capture: each task's rows in row order."""
+    return captured.rows(key=lambda record: record["seq"])
+
+
+def _documents(pages: List[Tuple[Captured, Captured]]) -> List[Tuple[str, Dict[str, Any]]]:
+    """``(task id, document)`` of ``_fetch``'s pages in task-id order: body, handoff rows, card columns."""
+    documents = []
+    for rows, handoff_rows in pages:
+        records = rows.rows(key=lambda record: record["task_id"])
+        handoffs = store.decode_handoffs([record["task_id"] for record in records], _handoff_records(handoff_rows))
+        documents.extend((str(record["task_id"]), store_task_cards.project(store.project_handoffs(
+            json.loads(record["body"]), handoffs[record["task_id"]]), record)) for record in records)
+    return documents
+
+
+def _decode(pages: List[Tuple[Captured, Captured]]) -> List[Dict[str, Any]]:
+    """The documents of ``_fetch``'s pages, in task-id order."""
+    return [document for _task_id, document in _documents(pages)]
 
 
 class Reprepare(Exception):
@@ -195,7 +252,7 @@ def list_documents(root: Any, *, statuses: Optional[Iterable[str]] = None) -> Li
         return []
     with open_store(root, write=False) as txn:
         fetched = _fetch(txn) if wanted is None else _fetch(txn, f"t.status IN ({','.join('?' * len(wanted))})", wanted)
-    return _decode(*fetched)
+    return _decode(fetched)
 
 
 def filtered_list_candidates(root: Any, statuses: Iterable[str], limit: Optional[int]) -> List[Dict[str, Any]]:
@@ -224,7 +281,7 @@ def filtered_list_candidates(root: Any, statuses: Iterable[str], limit: Optional
                         f"AND status IN ({','.join('?' * len(wanted))}) "
                         f"ORDER BY ts DESC, task_id ASC{bound}")
             fetched = _fetch(txn, f"t.list_stable IS NULL OR t.list_stable=0 OR t.task_id IN ({selected})", params)
-    return _decode(*fetched)
+    return _decode(fetched)
 
 
 def lineage_where(parent: str, root_id: str, *, direct_only: bool,
@@ -263,7 +320,7 @@ def select_lineage(root: Any, parent: str, root_id: str, *, direct_only: bool = 
                                   queue_members=queue_members)
     with open_store(root, write=False) as txn:
         fetched = _fetch(txn, where, params)
-    return _decode(*fetched)
+    return _decode(fetched)
 
 
 def task_facts(root: Any, *, where: str = "", params: Iterable[Any] = ()) -> Dict[str, Dict[str, Any]]:
@@ -271,10 +328,9 @@ def task_facts(root: Any, *, where: str = "", params: Iterable[Any] = ()) -> Dic
     ``FACT_KEYS`` as strings (``""`` for no fact), ``presence_authority_recorded`` as a bool."""
     clause = f"WHERE {where}" if where else ""
     with open_store(root, write=False) as txn:
-        records = txn.conn.execute(
-            f"SELECT {','.join(FACT_KEYS)} FROM tasks {clause} ORDER BY task_id", tuple(params)).fetchall()
+        captured = capture(txn.conn, f"SELECT {','.join(FACT_KEYS)} FROM tasks {clause}", params, FACT_KEYS)
     facts = {}
-    for record in records:
+    for record in captured.rows(key=lambda record: record["task_id"]):
         row = {key: str(record[key] or "") for key in FACT_KEYS if key != "presence_authority_recorded"}
         row["presence_authority_recorded"] = bool(record["presence_authority_recorded"])
         facts[row["task_id"]] = row
@@ -284,10 +340,11 @@ def task_facts(root: Any, *, where: str = "", params: Iterable[Any] = ()) -> Dic
 def newest_ids(root: Any, limit: Optional[int] = None, *, where: str = "", params: Iterable[Any] = ()) -> List[str]:
     """Task ids newest first by the stored ``ts`` (a row without one sorts oldest), ties by id."""
     clause = f"WHERE {where} " if where else ""
+    bound = "" if limit is None else f" LIMIT {int(limit)}"
     with open_store(root, write=False) as txn:
-        bound = "" if limit is None else f" LIMIT {int(limit)}"
-        return [record["task_id"] for record in
-                txn.conn.execute(f"SELECT task_id FROM tasks {clause}{_NEWEST_ORDER}{bound}", tuple(params))]
+        captured = capture(txn.conn, f"SELECT task_id, ts FROM tasks {clause}{_NEWEST_ORDER}{bound}", params,
+                           ("task_id", "ts"))
+    return [record["task_id"] for record in captured.rows(key=_newest("ts"), reverse=True)]
 
 
 ROOT_RESULT_WHERE = store.ROOT_RESULT_WHERE
@@ -305,8 +362,9 @@ def newest_root_ids(root: Any, limit: Optional[int] = None, *, project_id: str =
                             else ("tasks_root_ts", "", ()))
     bound = "" if limit is None else f" LIMIT {int(limit)}"
     with open_store(root, write=False) as txn:
-        return [record["task_id"] for record in txn.conn.execute(
-            f"SELECT task_id FROM tasks INDEXED BY {index} WHERE {scope}{ROOT_RESULT_WHERE} {_NEWEST_ORDER}{bound}", params)]
+        captured = capture(txn.conn, f"SELECT task_id, ts FROM tasks INDEXED BY {index} "
+                           f"WHERE {scope}{ROOT_RESULT_WHERE} {_NEWEST_ORDER}{bound}", params, ("task_id", "ts"))
+    return [record["task_id"] for record in captured.rows(key=_newest("ts"), reverse=True)]
 
 
 def project_result_counts(root: Any, project_id: str) -> Tuple[int, int]:
@@ -325,9 +383,9 @@ def documents_by_ids(root: Any, task_ids: Iterable[str]) -> Dict[str, Dict[str, 
     if not ids:
         return {}
     with open_store(root, write=False) as txn:
-        rows, handoffs = _fetch(txn, f"t.task_id IN ({','.join('?' * len(ids))})", ids)
+        fetched = _fetch(txn, f"t.task_id IN ({','.join('?' * len(ids))})", ids)
     # Keyed by each row's stored id: a body that names another task never stands for that one.
-    return {str(record["task_id"]): document for record, document in zip(rows, _decode(rows, handoffs))}
+    return dict(_documents(fetched))
 
 
 # A display read (``task_reads``: history cards; ``effective_task_result`` with
@@ -403,14 +461,15 @@ def display_documents(root: Any, task_ids: Iterable[str],
     with open_store(root, write=False) as txn:
         _columns, join = store_task_cards.select(txn)
         view = _card_sql(_display_sql()) if join else _display_sql()
-        record = txn.conn.execute(  # '' || ...: the view travels as a string, decoded per use
-            f"SELECT json_group_array(json_array(t.task_id, '' || {view}, t.write_seq)) FROM tasks AS t "
-            f"JOIN task_bodies AS b ON b.task_id = t.task_id{join} WHERE t.task_id IN (SELECT value FROM json_each(?))",
-            (json.dumps(ids),)).fetchone()
-        handoff_rows = txn.handoff_records(ids)
+        views = capture(txn.conn,  # '' || ...: the view travels as a string, decoded per use
+                        f"SELECT t.task_id, '' || {view} AS view, t.write_seq FROM tasks AS t JOIN task_bodies AS b "
+                        f"ON b.task_id = t.task_id{join} WHERE t.task_id IN (SELECT value FROM json_each(?))",
+                        (json.dumps(ids),), ("task_id", "view", "write_seq"))
+        handoff_capture = _handoff_capture(txn, json.dumps(ids))
+    handoff_rows = _handoff_records(handoff_capture)
     handoffs = store.decode_handoffs(ids, handoff_rows)
     held = {record["task_id"] for record in handoff_rows}
-    found = json.loads(record[0] or "[]")
+    found = views.tuples()
     if versions is not None:
         versions.update((task_id, int(seq or 0)) for task_id, _text, seq in found)
     return {task_id: (text if task_id not in held else
@@ -426,11 +485,10 @@ def task_versions(root: Any, task_ids: Iterable[str]) -> Dict[str, Tuple[int, st
     if not ids:
         return {}
     with open_store(root, write=False) as txn:
-        record = txn.conn.execute(
-            "SELECT json_group_array(json_array(task_id, write_seq, status, owes_synthesis)) FROM tasks "
-            "WHERE task_id IN (SELECT value FROM json_each(?))", (json.dumps(ids),)).fetchone()
-    return {task_id: (int(seq or 0), str(status or ""), bool(owes))
-            for task_id, seq, status, owes in json.loads(record[0] or "[]")}
+        captured = capture(txn.conn, "SELECT task_id, write_seq, status, owes_synthesis FROM tasks WHERE task_id IN "
+                           "(SELECT value FROM json_each(?))", (json.dumps(ids),),
+                           ("task_id", "write_seq", "status", "owes_synthesis"))
+    return {task_id: (int(seq or 0), str(status or ""), bool(owes)) for task_id, seq, status, owes in captured.tuples()}
 
 
 def task_drive_status(root: Any, task_ids: Iterable[str]) -> Dict[str, Tuple[str, str]]:
@@ -441,15 +499,16 @@ def task_drive_status(root: Any, task_ids: Iterable[str]) -> Dict[str, Tuple[str
     if not ids:
         return {}
     with open_store(root, write=False) as txn:
-        records = txn.conn.execute(
-            "SELECT task_id, status, COALESCE(child_drive_root, headless_child_drive_root, drive_root) FROM tasks "
-            "WHERE task_id IN (SELECT value FROM json_each(?))", (json.dumps(ids),)).fetchall()
-    return {str(record[0]): (str(record[1] or ""), str(record[2] or "")) for record in records}
+        captured = capture(txn.conn, "SELECT task_id, status, COALESCE(child_drive_root, headless_child_drive_root, "
+                           "drive_root) AS drive FROM tasks WHERE task_id IN (SELECT value FROM json_each(?))",
+                           (json.dumps(ids),), ("task_id", "status", "drive"))
+    return {str(task_id): (str(status or ""), str(drive or "")) for task_id, status, drive in captured.tuples()}
 
 
 def task_ids(root: Any) -> List[str]:
     with open_store(root, write=False) as txn:
-        return txn.task_ids()
+        captured = capture(txn.conn, "SELECT task_id FROM tasks", (), ("task_id",))
+    return sorted(row[0] for row in captured.tuples())
 
 
 class TreeCensus(NamedTuple):
@@ -498,6 +557,28 @@ def _tied(tree_id: str, members: Dict[str, dict], rows: Dict[str, dict], faults:
         tied |= more
 
 
+_BODY_PAGE = ("SELECT b.task_id, CASE WHEN typeof(b.body)='blob' THEN NULL ELSE b.body END AS body, "
+              "CASE WHEN typeof(b.body)='blob' THEN hex(b.body) END AS body_hex FROM task_bodies AS b "
+              "WHERE b.task_id IN (SELECT value FROM json_each(?))")  # a damaged BLOB body travels as its bytes
+
+
+def _with_bodies(records: List[dict], pages: List[Captured]) -> List[dict]:
+    """Each census row with its stored body as the per-row read saw it: the text, a BLOB's own bytes, or ``None``
+    for a row without one."""
+    bodies = {}
+    for page in pages:
+        for task_id, text, hexed in page.tuples():
+            bodies[task_id] = bytes.fromhex(hexed) if hexed is not None else text
+    return [{**record, "body": bodies.get(record["task_id"])} for record in records]
+
+
+def _keyed(captured: Captured) -> Dict[str, dict]:
+    """A captured census selection by task id, in the aggregate's order. None of the census statements has an
+    ORDER BY, so the per-row read's order was unspecified as well; that the two answer in the same order, with and
+    without planner statistics, is pinned by tests/test_store_capture_readers.py, not promised by SQLite."""
+    return {row["task_id"]: row for row in captured.rows()}
+
+
 def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
                queue_rows: Iterable[dict] = (), linked: Iterable[str] = ()) -> TreeCensus:
     """Typed membership; a row whose root rests on its own record is validated alone.
@@ -508,8 +589,9 @@ def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
     A missing, unparsable, non-object or other task's body leaves that ROW unresolved, never the
     census: ``linked`` when a typed parent/retry/supersession edge to or from this tree, a handoff
     naming it or a caller's ``linked`` id (queue, custody, model request) ties it here; otherwise
-    a named gap, neither member nor proof of absence. A store failure raises. Bodies are decoded
-    after the read, unless descendant anchors need them within it (one snapshot either way).
+    a named gap, neither member nor proof of absence. A store failure raises. Each statement is
+    captured in one step (``store_capture``), the bodies in pages of ids (``_pages``), and decoded after
+    the read, unless descendant anchors need them within it (one snapshot either way).
     Descendant selection closes over the indexed parent chain, including bridges present only in
     the queue snapshot; a row reached so is a member by ancestry, and a damaged one stays named
     (linked) beside it. Durable rows win over queue rows. The caller still applies its own
@@ -520,18 +602,22 @@ def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
     tree_id = str(tree_id)
     with open_store(root, write=False) as txn:
         flagged = int(txn.meta("schema_version") or VERSION) >= VERSION  # control_valid exists
-        captured = txn.conn.execute(
-            f"SELECT {_TREE_SQL},b.body FROM tasks AS t LEFT JOIN task_bodies AS b ON b.task_id=t.task_id "
-            "WHERE t.root_task_id IS NULL" + (" OR (t.root_task_id=? AND t.control_valid=0)" if flagged else ""),
-            (tree_id,) if flagged else ()).fetchall()
-        selected = {row["task_id"]: dict(row) for row in txn.conn.execute(
-            f"SELECT {_TREE_SQL} FROM tasks AS t WHERE t.root_task_id=?", (tree_id,))}
-        ties = {*map(str, linked), *(row[0] for row in txn.conn.execute(  # a damaged handoff ties nothing
-            "SELECT task_id FROM task_handoffs WHERE task_id IN (SELECT value FROM json_each(?)) AND "
-            "CASE WHEN json_valid(facts) THEN json_extract(facts, '$.root_task_id') END=?",
-            (json.dumps([r["task_id"] for r in captured]), tree_id)))}
-        if descendants:
-            members, rows, faults = _validated(tree_id, selected, captured)
+        where = "t.root_task_id IS NULL" + (" OR (t.root_task_id=? AND t.control_valid=0)" if flagged else "")
+        params = (tree_id,) if flagged else ()
+        # The rows first, then their bodies by pages of ids: every underived body of an install still deriving
+        # them, in one aggregate, could pass SQLite's string limit.
+        records = capture(txn.conn, f"SELECT {_TREE_SQL} FROM tasks AS t WHERE {where}", params, _TREE_ROW).rows()
+        ids = [record["task_id"] for record in records]
+        bodies = [page for _ids, page in _pages(txn, ids, _BODY_PAGE, ("task_id", "body", "body_hex"))]
+        selected = capture(txn.conn, f"SELECT {_TREE_SQL} FROM tasks AS t WHERE t.root_task_id=?", (tree_id,),
+                           _TREE_ROW)
+        handoffs = capture(txn.conn,  # a damaged handoff ties nothing
+                           "SELECT task_id FROM task_handoffs WHERE task_id IN (SELECT value FROM json_each(?)) AND "
+                           "CASE WHEN json_valid(facts) THEN json_extract(facts, '$.root_task_id') END=?",
+                           (json.dumps(ids), tree_id), ("task_id",))
+        if descendants:  # the closure's anchors are these rows: decoded inside this one snapshot
+            ties = {*map(str, linked), *(row[0] for row in handoffs.tuples())}
+            members, rows, faults = _validated(tree_id, _keyed(selected), _with_bodies(records, bodies))
             queued = {}
             for row in queue_rows:
                 tid = str(row.get("task_id") or row.get("id") or "")
@@ -539,18 +625,18 @@ def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
                     queued.setdefault(tid, row)
             # A queue record cannot replace a durable row, even when that row is
             # outside the selected tree. This addressed read preserves that rule.
-            durable_queue = {row["task_id"]: dict(row) for row in txn.conn.execute(
-                f"SELECT {_TREE_SQL} FROM tasks AS t "
-                "WHERE t.task_id IN (SELECT value FROM json_each(?))", (json.dumps(list(queued)),))}
+            durable_queue = _keyed(capture(txn.conn, f"SELECT {_TREE_SQL} FROM tasks AS t WHERE t.task_id IN "
+                                           "(SELECT value FROM json_each(?))", (json.dumps(list(queued)),), _TREE_ROW))
             queued.update({tid: rows.get(tid, row) for tid, row in durable_queue.items()})
             anchors = {tree_id, *members}
             while True:
-                reach = txn.conn.execute(
-                    "WITH RECURSIVE reach(id) AS (SELECT value FROM json_each(?) UNION "
-                    "SELECT t.task_id FROM tasks AS t JOIN reach ON t.parent_task_id=reach.id) "
-                    f"SELECT {_TREE_SQL} FROM tasks AS t "
-                    "WHERE t.task_id IN (SELECT id FROM reach)", (json.dumps(sorted(anchors)),)).fetchall()
-                members.update({row["task_id"]: rows.get(row["task_id"], dict(row)) for row in reach})
+                reach = capture(txn.conn,
+                                "WITH RECURSIVE reach(id) AS (SELECT value FROM json_each(?) UNION "
+                                "SELECT t.task_id FROM tasks AS t JOIN reach ON t.parent_task_id=reach.id) "
+                                f"SELECT {_TREE_SQL} FROM tasks AS t "
+                                "WHERE t.task_id IN (SELECT id FROM reach)", (json.dumps(sorted(anchors)),),
+                                _TREE_ROW).rows()
+                members.update({row["task_id"]: rows.get(row["task_id"], row) for row in reach})
                 reached = {tree_id, *members}
                 while True:
                     extra = {tid for tid, row in queued.items() if tid not in reached and (
@@ -563,7 +649,8 @@ def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
                 if not new:
                     return TreeCensus(members, _tied(tree_id, members, rows, faults, ties))
                 anchors.update(reached)
-    members, rows, faults = _validated(tree_id, selected, captured)
+    ties = {*map(str, linked), *(row[0] for row in handoffs.tuples())}
+    members, rows, faults = _validated(tree_id, _keyed(selected), _with_bodies(records, bodies))
     return TreeCensus(members, _tied(tree_id, members, rows, faults, ties))
 
 
@@ -599,12 +686,12 @@ def drive_retention_facts(root: Any, task_ids: Iterable[str], *,
 
         upgrade_current_schema(root)
     with open_store(root, write=False) as txn:
-        rows = txn.conn.execute(
-            "SELECT t.task_id, t.status, t.delegation_role, t.drive_retention_at, "
-            "b.task_id IS NOT NULL AS body_present FROM tasks AS t "
-            "LEFT JOIN task_bodies AS b ON b.task_id=t.task_id "
-            f"WHERE t.task_id IN ({','.join('?' * len(ids))})", ids).fetchall()
-    facts = {row["task_id"]: dict(row) for row in rows}
+        captured = capture(txn.conn, "SELECT t.task_id, t.status, t.delegation_role, t.drive_retention_at, "
+                           "b.task_id IS NOT NULL AS body_present FROM tasks AS t "
+                           "LEFT JOIN task_bodies AS b ON b.task_id=t.task_id "
+                           f"WHERE t.task_id IN ({','.join('?' * len(ids))})", ids,
+                           ("task_id", "status", "delegation_role", "drive_retention_at", "body_present"))
+    facts = {row["task_id"]: row for row in captured.rows(key=lambda row: row["task_id"])}
     classified = []
     for task_id, row in facts.items():
         if stopped():
@@ -637,9 +724,9 @@ def drive_retention_facts(root: Any, task_ids: Iterable[str], *,
 def _collection_ids(root: Any, column: str, pending: Optional[int], after: str) -> List[str]:
     where = "IS NULL" if pending is None else "=1"
     with open_store(root, write=False) as txn:
-        return [record[0] for record in txn.conn.execute(
-            f"SELECT task_id FROM tasks WHERE {column} {where} AND task_id>? "
-            "ORDER BY task_id LIMIT ?", (after, _COLLECTION_BATCH))]
+        captured = capture(txn.conn, f"SELECT task_id FROM tasks WHERE {column} {where} AND task_id>? "
+                           "ORDER BY task_id LIMIT ?", (after, _COLLECTION_BATCH), ("task_id",))
+    return sorted(row[0] for row in captured.tuples())
 
 
 def _classify_collection(root: Any, column: str, predicate: Callable[[dict], bool],
@@ -730,8 +817,9 @@ def plan_collection_candidates(root: Any, *, stop: Optional[Callable[[], bool]] 
 def inventory(root: Any) -> List[Dict[str, Any]]:
     """Every task's paging identity, newest write first: ``name`` (the task id), ``write_seq``
     (changes with every write, the role the file size and mtime played) and ``updated_at``."""
-    with open_store(root, write=False) as txn:
-        records = txn.conn.execute("SELECT task_id, write_seq, updated_at FROM tasks "
-                                   "ORDER BY updated_at DESC, task_id DESC").fetchall()
+    with open_store(root, write=False) as txn:  # ordered: the scan reads the ``tasks_updated`` index, not the table
+        captured = capture(txn.conn, "SELECT task_id, write_seq, updated_at FROM tasks ORDER BY updated_at DESC, "
+                           "task_id DESC", (), ("task_id", "write_seq", "updated_at"))
     return [{"name": record["task_id"], "write_seq": int(record["write_seq"] or 0),
-             "updated_at": str(record["updated_at"] or "")} for record in records]
+             "updated_at": str(record["updated_at"] or "")}
+            for record in captured.rows(key=_newest("updated_at"), reverse=True)]

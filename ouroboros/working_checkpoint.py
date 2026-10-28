@@ -261,7 +261,12 @@ def save_terminal(limit_ctx: Any) -> None:
     (a failure exit) saves and ACKs nothing, as would a caller's own handled one;
     a failed save leaves the mail unread."""
     ctx = getattr(getattr(limit_ctx, "tools", None), "_ctx", None)
-    if ctx is None or not getattr(ctx, "_pending_content_acks", None) or sys.exc_info()[0] is not None:
+    if ctx is None:
+        return
+    from ouroboros.owner_relay import flush_held_state
+
+    flush_held_state(ctx)  # owner sources a busy store refused during the turn: carried on either exit
+    if not getattr(ctx, "_pending_content_acks", None) or sys.exc_info()[0] is not None:
         return
     try:
         save_ready(limit_ctx)

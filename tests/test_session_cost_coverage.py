@@ -175,6 +175,9 @@ def test_receipts_and_amounts_share_one_ledger_transaction(tmp_path, monkeypatch
                 def bucket(self, *a, **kw):
                     seen.append("amount")
                     return txn.bucket(*a, **kw)
+                def summary_rows(self, *a, **kw):  # the amounts captured in one step (store_capture)
+                    seen.append("amount")
+                    return txn.summary_rows(*a, **kw)
                 def attempt(self, *a, **kw):
                     seen.append("receipt")
                     return txn.attempt(*a, **kw)
