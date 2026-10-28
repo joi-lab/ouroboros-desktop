@@ -80,7 +80,7 @@ def give_back_converted_journals() -> None:
         try:
             if not leased:
                 store.close_connections(path)
-                configure_journal(path, tier)
+                configure_journal(path, tier, wait_sec=0)  # a busy file waits for a later teardown, not here
                 continue
         except store.StoreBusy:  # a lease taken since, or another process holding the file at the handoff
             pass
