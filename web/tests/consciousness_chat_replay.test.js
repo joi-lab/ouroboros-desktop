@@ -186,3 +186,16 @@ test('replay: a page whose terminal row lies beyond it settles the card from its
         assert.match(seen.facts, /<dt>Started by<\/dt><dd>Schedule · <span data-i18n-authored>Daily check<\/span><\/dd>/);
     });
 });
+
+test('live: the supervisor\'s task_done names the origin without waiting for a history read', async () => {
+    await replay({ messages: [], window: { complete: true } }, (feed, handlers) => {
+        handlers.get('chat')(narration('l2', 'Reading the disk', { suggested_name: 'Daily check' }));
+        assert.doesNotMatch(view(feed, 'l2').facts, /Started by/);
+        handlers.get('log')({ chat_id: 1, data: { type: 'task_done', task_id: 'l2', status: 'completed', wake_summary: SENTENCE,
+            schedule_name: 'Daily check', wake_silent: true, quiet_effective: true, ts: AT } });
+        const seen = view(feed, 'l2');
+        assert.equal(seen.title, 'Daily check');
+        assert.equal(seen.line, SENTENCE);
+        assert.match(seen.facts, /<dt>Started by<\/dt><dd>Schedule · <span data-i18n-authored>Daily check<\/span><\/dd>/);
+    });
+});

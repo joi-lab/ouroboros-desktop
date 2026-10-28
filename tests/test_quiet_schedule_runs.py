@@ -160,7 +160,8 @@ def test_a_quiet_main_born_schedule_run_says_what_it_did(wake, sched, monkeypatc
     assert row["chat_id"] == 1 and row["text"] == "Done · no message" and row["quiet_effective"] is True
     assert row["suggested_name"] == row["schedule_name"] == "Daily check"
     assert row.get("wake_summary", "") == summary
-    assert next(f for f in pushed if f.get("type") == "task_done").get("wake_summary", "") == summary
+    frame = next(f for f in pushed if f.get("type") == "task_done")
+    assert frame.get("wake_summary", "") == summary and frame["schedule_name"] == "Daily check"  # the live card's origin
     assert not sent and not any(r.get("type") == "project_completion_summary" for r in rows)
     assert "Internal check result." not in json.dumps(rows, ensure_ascii=False)
     # The scheduler reads the settled run once: Activity's line and the next run's memory of it.

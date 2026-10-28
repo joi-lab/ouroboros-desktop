@@ -40,7 +40,7 @@ def test_both_live_terminal_writers_keep_wake_words_and_delivery_truth(tmp_path,
     from ouroboros import headless
     from supervisor import events, events_task_done
 
-    stored = seed_wake(tmp_path, owner_message_sent=sent, **({"wake_summary": summary} if summary else {}))
+    stored = seed_wake(tmp_path, owner_message_sent=sent, schedule_name="Daily check", **({"wake_summary": summary} if summary else {}))
     ctx = SimpleNamespace(DRIVE_ROOT=tmp_path, RUNNING={})
     captured = []
     monkeypatch.setattr(headless, "terminal_task_files_ready", lambda *a: True)
@@ -53,11 +53,11 @@ def test_both_live_terminal_writers_keep_wake_words_and_delivery_truth(tmp_path,
         events_task_done._handle_task_done(event, ctx)
     assert len(captured) == 1
     assert captured[0]["quiet_effective"] is (not sent)
-    assert captured[0].get("wake_summary", "") == summary
+    assert captured[0].get("wake_summary", "") == summary and captured[0]["schedule_name"] == "Daily check"
     durable = [json.loads(line) for line in (tmp_path / "logs/events.jsonl").read_text(encoding="utf-8").splitlines()]
     done = next(row for row in durable if row.get("type") == "task_done")
     assert done["quiet_effective"] is (not sent)
-    assert done.get("wake_summary", "") == summary
+    assert done.get("wake_summary", "") == summary and done["schedule_name"] == "Daily check"
 
 
 @pytest.mark.parametrize("destination", ["current", "main"])
