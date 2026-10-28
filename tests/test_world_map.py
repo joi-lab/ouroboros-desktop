@@ -188,7 +188,7 @@ def test_update_world_publishes_on_the_canonical_root_with_revision_and_the_host
 
     result = _update_world(ctx, "# WORLD.md\n\n## What lives here\n- new\n", expected_revision=revision)
     assert result.startswith("OK: world map updated") and "revision=" in result
-    text = world.read_text(encoding="utf-8")
+    text = world.read_bytes().decode("utf-8")  # the journal keeps the file's bytes, line ends included
     assert "- new" in text and "- old" not in text and "measured at startup, host" in text
     # The forked drive stayed untouched: the map lives on the canonical root the context reads.
     assert not (drive / "memory" / "WORLD.md").exists()
@@ -221,6 +221,7 @@ def test_refresh_keeps_a_legacy_profile_the_mind_edited_and_journals_the_pre_ima
     legacy = ("# WORLD.md — Environment Profile\n\n## Channels\n- Claude chat X: socket /tmp/x\n\n## System\n"
               "- **OS**: old\n\n*(Generated automatically on first boot)*\n")
     path.write_text(legacy, encoding="utf-8")
+    legacy_raw = path.read_bytes()  # the pre-image as stored (CRLF on Windows)
 
     assert wprof.refresh_world_profile(str(path)) is True
     text = path.read_text(encoding="utf-8")
@@ -228,7 +229,7 @@ def test_refresh_keeps_a_legacy_profile_the_mind_edited_and_journals_the_pre_ima
     assert "- Claude chat X: socket /tmp/x" in text and "- **OS**: old" in text
     assert text.count(wprof.MEASURED_START) == 1 and text.startswith("# WORLD.md")
     rows = [json.loads(line) for line in (tmp_path / "world_journal.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert rows[-1]["source_type"] == "legacy_wrap" and rows[-1]["old_content"] == legacy
+    assert rows[-1]["source_type"] == "legacy_wrap" and rows[-1]["old_content"].encode("utf-8") == legacy_raw
 
 
 def test_insertion_keeps_an_indented_first_line(tmp_path, monkeypatch):
@@ -270,7 +271,7 @@ def test_update_world_mirrors_the_fork_copy_and_names_the_map_on_a_stale_revisio
     (canonical / "memory" / "WORLD.md").write_text(initial, encoding="utf-8")
     (drive / "memory" / "WORLD.md").write_text(initial, encoding="utf-8")
     ctx = _world_ctx(canonical, drive)
-    revision = hashlib.sha256(initial.encode()).hexdigest()
+    revision = hashlib.sha256((canonical / "memory" / "WORLD.md").read_bytes()).hexdigest()  # of the stored bytes
 
     assert _update_world(ctx, f"{wprof.TITLE}\n\n- new\n", expected_revision=revision).startswith("OK")
     canonical_text = (canonical / "memory" / "WORLD.md").read_text(encoding="utf-8")

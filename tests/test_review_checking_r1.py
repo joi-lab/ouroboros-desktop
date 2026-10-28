@@ -110,7 +110,8 @@ def test_real_linked_worktree_subject_reaches_its_own_checking_worktree(author, 
     (linked / "f.txt").write_bytes(b"linked unstaged\n")
     source = rc.freeze_checking_source(linked, data_root=tmp_path / "data", subject=rc.SUBJECT_INDEX)
     area = pathlib.Path(rc.prepare_seat_area(tmp_path / "data", "task", "linked", source))
-    assert (area / ".git").is_file() and _git(area, "rev-parse", "--git-common-dir") == str((author / ".git").resolve())
+    assert (area / ".git").is_file()  # a linked worktree, sharing the author's object store:
+    assert (area / _git(area, "rev-parse", "--git-common-dir")).resolve() == (author / ".git").resolve()
     assert (area / "f.txt").read_bytes() == b"linked staged\n"
     assert _git(area, "write-tree") == source["tree"]
     assert (linked / "f.txt").read_bytes() == b"linked unstaged\n"

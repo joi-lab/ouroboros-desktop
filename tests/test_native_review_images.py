@@ -174,7 +174,8 @@ def test_author_evidence_retained_original_opens_after_temporary_path_deleted(ev
     model_response(ctx, "after", "The address line is visible.")
     source = capture_commit_review_evidence(ctx)
     exact = read_actor_source_bytes(ctx.budget_drive_root, ctx.task_id, source["source_ref"]).decode()
-    assert str(retained) in exact and observation["source_sha256"] in exact
+    # The evidence text is JSON: the path appears as its JSON string (escaped backslashes on Windows).
+    assert json.dumps(str(retained), ensure_ascii=False) in exact and observation["source_sha256"] in exact
     path.unlink()
     executor, llm = _executor(ctx.repo_dir.parent, retained, data=pathlib.Path(source["data_root"]))
     result = executor.execute()

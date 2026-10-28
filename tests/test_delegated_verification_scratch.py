@@ -333,6 +333,7 @@ def test_full_suite_sized_evidence_is_retained_whole_by_streaming(tmp_path, monk
     its disposition for size, no file is read into memory or into any answer, and none of it is
     hashed into the target's object database (it stays out of the result commit)."""
     import hashlib
+    import stat
     import tracemalloc
 
     from ouroboros.tools.delegate import _capture_terminal_patch
@@ -346,7 +347,7 @@ def test_full_suite_sized_evidence_is_retained_whole_by_streaming(tmp_path, monk
         for _ in range(64 + 1):
             stream.write(chunk)
             digest.update(chunk)
-    size = big.stat().st_size
+    size, mode = big.stat().st_size, stat.S_IMODE(big.stat().st_mode)  # the mode it has: 0o666 on Windows
     assert size > 64 * 1024 * 1024
     big_blob = _git(target, "hash-object", str(big)).stdout.strip()  # computed, never written
     entry = _isolated_entry(ctx, target, handle)
@@ -360,7 +361,7 @@ def test_full_suite_sized_evidence_is_retained_whole_by_streaming(tmp_path, monk
         named = capture["named_evidence"]
         assert named["status"] == "retained" and named["gaps"] == [], named
         assert named["files"] == [{"path": ".review-evidence/run-1/results.jsonl", "size": size,
-                                   "sha256": digest.hexdigest(), "mode": 0o644}]
+                                   "sha256": digest.hexdigest(), "mode": mode}]
         assert peak < 16 * 1024 * 1024, peak  # streamed: the file never sat in memory whole
         assert _git(target, "cat-file", "-e", f"{big_blob}^{{blob}}", check=False).returncode != 0
         out = _integrate_delegated_patch(ctx, "run-1", "reject", "checked")

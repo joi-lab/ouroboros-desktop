@@ -88,7 +88,7 @@ def live(state, n, *, facts=("mention",), **kw):
 
 
 def files(root):
-    return {str(path.relative_to(root)): path.stat().st_mtime_ns for path in Path(root).rglob("*") if path.is_file()}
+    return {path.relative_to(root).as_posix(): path.stat().st_mtime_ns for path in Path(root).rglob("*") if path.is_file()}
 
 
 def history_client(root):

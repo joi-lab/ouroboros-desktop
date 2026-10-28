@@ -71,7 +71,8 @@ def test_staged_subject_reaches_every_seat_and_reviewer_git_never_moves_the_auth
     before = _author_state(author)
     one = pathlib.Path(rc.prepare_seat_area(data, "task", "op-1", source))
     two = pathlib.Path(rc.prepare_seat_area(data, "task", "op-2", source))
-    assert (one / ".git").is_file() and _git(one, "rev-parse", "--git-common-dir") == str((author / ".git").resolve())
+    assert (one / ".git").is_file()  # a linked worktree, sharing the author's object store:
+    assert (one / _git(one, "rev-parse", "--git-common-dir")).resolve() == (author / ".git").resolve()
     assert (one / "f.txt").read_text() == "A staged\n"  # staged A, never unstaged B
     assert _git(one, "write-tree") == source["tree"]
     assert _git(one, "rev-parse", "HEAD") == source["parent"]
