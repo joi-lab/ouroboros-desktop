@@ -4845,11 +4845,11 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
     }
 }
 
-/* Subagents: Off · Auto · Swarm on the same strip, the chosen one in its tone (Off the neutral ink, Auto the accent,
-   Swarm the soft crimson of a switched-on capsule); a value Settings rules out is disabled ink. The mark is a small network:
-   Ouroboros in meta ink, its helpers and their threads in the rail's ink until the mode lights them: none, the first,
-   every helper and the threads between them (Swarm). Closed on Swarm the whole capsule takes the soft crimson; Off is muted; Settings-off adds a small lock.
-   Open, the line under the strip says what the value means (composer_subagents.js), and the row grows upward. */
+/* Subagents: Off · Auto · Swarm on the same strip, the chosen one in its tone (Off the neutral ink, Auto and Swarm the
+   accent); a value Settings rules out is disabled ink. The mark is a small network: Ouroboros in meta ink, its helpers
+   and their threads in the rail's ink until the mode lights them: none, the first, every helper and the threads between
+   them (Swarm). Closed, Off is muted and Auto and Swarm read like the neighbours' values: no fill, the network tells them
+   apart (owner 28.10); Settings-off adds a small lock. Open, the hint above it says what the value means (ui_hint.js). */
 .chat-subagents-mode {
     --mode-ink: var(--accent-light);
     --mode-fill: var(--accent-dim);
@@ -4857,10 +4857,6 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 .chat-subagents-mode[data-mode="off"] {
     --mode-ink: var(--status-neutral-fg);
     --mode-fill: var(--status-neutral-bg);
-}
-.chat-subagents-mode[data-mode="swarm"] {
-    --mode-ink: var(--tone-crimson-soft-ink);
-    --mode-fill: var(--tone-crimson-soft);
 }
 .chat-subagents-strip .chat-context-thumb { left: var(--thumb-left, 0); width: var(--thumb-width, 0); }
 .chat-subagents-mode .chat-seg { justify-content: center; min-width: var(--touch-target-min); box-sizing: border-box; }
@@ -4874,31 +4870,6 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 .chat-subagents-mode[data-locked="true"] .chat-subagents-lock { display: inline-flex; }
 .chat-subagents-mode[data-locked="true"]:not([data-open="true"]) .chat-capsule-value { margin-inline-end: 5px; }
 .chat-subagents-mode[data-locked="true"][data-open="true"] .chat-subagents-lock { margin-inline-end: var(--space-2); }
-.chat-subagents-note {
-    order: 10;
-    flex: 1 0 100%;
-    box-sizing: border-box;
-    min-width: 0;
-    padding: 2px var(--space-1);
-}
-.chat-subagents-note[hidden], .chat-subagents-note [hidden] { display: none; }
-.chat-subagents-meaning, .chat-subagents-reason {
-    margin: 0;
-    font-size: var(--type-body);
-    font-weight: 400;
-    line-height: var(--line-body);
-    color: var(--text-secondary);
-    white-space: normal;
-}
-.chat-subagents-rule {
-    margin: 2px 0 0;
-    font-size: var(--type-meta);
-    font-weight: 400;
-    line-height: var(--line-meta);
-    color: var(--text-meta);
-    white-space: normal;
-}
-.chat-subagents-locked { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
 
 /* Effort: one segment per level, as wide as its word plus the padding; the band and the three
    handles sit over it and share one vertical inset, so their edges meet exactly. The max bracket
@@ -10572,8 +10543,8 @@ body.keyboard-open .project-panel {
 :root[data-theme] .chat-budget-pill.ui-chrome-control[data-attention="1"] { background: linear-gradient(var(--tone-amber), var(--tone-amber)), var(--chip-float); }
 :root[data-theme] .chat-budget-pill.ui-chrome-control:active { transform: none; }
 /* The composer: Subagents, Context and Effort are neutral capsules. A setting's name takes the secondary ink at 500 and
-   its value the meta ink at 600 (owner 16.10: never the darkest ink); the only colour is a ring's lit arc, except
-   Subagents on Swarm, a switched-on capsule in the soft crimson. Send is the primary action's crimson tone. */
+   its value the meta ink at 600 (owner 16.10: never the darkest ink); the only colour is a ring's lit arc or the lit
+   helpers of Subagents' network, Swarm included (owner 28.10: no red fill). Send is the primary action's crimson tone. */
 :root[data-theme] .chat-input-wrap { --composer-control-shadow: var(--elev-rest); }
 :root[data-theme] :is(.chat-capsule, .chat-composer-chip) {
     border-color: transparent; background: var(--surface-capsule); color: var(--text-secondary); font-weight: 600;
@@ -10581,16 +10552,6 @@ body.keyboard-open .project-panel {
 }
 :root[data-theme] .chat-composer-chip:hover { border-color: transparent; background: var(--surface-capsule-hover); color: var(--text-primary); }
 :root[data-theme] .chat-subagents-mode[data-mode="off"]:not([data-open="true"]) :is(.chat-capsule-name, .chat-capsule-value) { color: var(--text-meta); }
-:root[data-theme] .chat-subagents-mode[data-mode="swarm"]:not([data-open="true"]) { background: var(--tone-crimson-soft); }
-:root[data-theme] .chat-subagents-mode[data-mode="swarm"]:not([data-open="true"]) :is(.chat-capsule-name, .chat-capsule-value) {
-    color: var(--tone-crimson-soft-ink);
-}
-:root[data-theme] .chat-subagents-mode[data-mode="swarm"]:not([data-open="true"]) :is(.chat-subagents-core, .chat-subagents-helper, .chat-subagents-link) {
-    color: var(--tone-crimson-soft-ink);
-}
-@media (hover: hover) {
-    :root[data-theme] .chat-subagents-mode[data-mode="swarm"]:not([data-open="true"]) .chat-capsule-head:hover { background: var(--tone-crimson-hover); }
-}
 :root[data-theme] .chat-capsule[data-open="true"] { border-color: transparent; }
 :root[data-theme] .chat-capsule[data-morph] {
     border-color: transparent; background: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none;

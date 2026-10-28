@@ -122,7 +122,11 @@ export function mountPair({ hover = false, reply, win, withBox = false, projectI
     return {
         controls, row, box, doc, contextEl, effortEl, posts, toasts, refreshes, answer, effortAnswer, seg,
         subagentsEl, subagentAnswer, settingsOpened, subSeg, subHead: subagentsEl.querySelector('.chat-subagents-head'),
-        subNote: row.querySelector('.chat-subagents-note'),
+        subHint: subagentsEl.querySelector('.ui-hint'),
+        contextHint: contextEl.querySelector('.ui-hint'), effortHint: effortEl.querySelector('.ui-hint'),
+        preview: (node, mode) => fire(node, 'pointerover', { pointerType: 'mouse', target: { closest: (selector) => (selector === '.chat-seg'
+            ? node.querySelectorAll('.chat-seg').find((seg) => seg.dataset.mode === mode) : null) } }),
+        previewEnd: (node) => fire(node, 'pointerleave', { pointerType: 'mouse' }),
         chooseSub: (mode) => fire(subStrip(), 'click', { target: onSeg(mode) }),
         subKey: (mode, key) => {
             const event = { key, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, target: onSeg(mode) };
