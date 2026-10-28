@@ -429,9 +429,9 @@ def _apply_diff(worktree: pathlib.Path, diff_text: "str | bytes") -> None:
         # end-of-line conversion either. On a Windows runner (`core.autocrlf=true`
         # by default) an LF payload applied against a CRLF-converted checkout
         # otherwise mangles every line ending, breaking the byte-faithful
-        # guarantee this whole capture exists to hold. No `.gitattributes text`
-        # directive governs the affected paths, so the config override is
-        # authoritative.
+        # guarantee this whole capture exists to hold. Where `.gitattributes`
+        # names a line ending (this repository's `* text=auto eol=lf`), the
+        # attribute decides and agrees; elsewhere this override is authoritative.
         ["-c", "core.autocrlf=false", "-c", "core.eol=lf",
          "apply", "--whitespace=nowarn", "--binary", "--unidiff-zero"],
         input_text=diff_text,

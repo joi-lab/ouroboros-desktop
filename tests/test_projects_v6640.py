@@ -270,6 +270,37 @@ def test_chat_annotation_compaction_drops_rows_after_chat_retention(tmp_path):
     assert (logs / "chat_annotations.jsonl").read_text(encoding="utf-8") == ""
 
 
+
+def test_chat_annotation_compaction_rewrites_the_journal_in_binary_mode(tmp_path, monkeypatch):
+    """The compacted journal keeps the appends' LF bytes: Windows writes CRLF through a descriptor opened
+    without ``O_BINARY``. POSIX translates nothing, so the bit is simulated as in ``test_atomic_write_v639``."""
+    import os as _os
+
+    from ouroboros import project_dialogue
+    from ouroboros.project_dialogue import append_chat_annotation
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "chat.jsonl").write_text("", encoding="utf-8")
+    (logs / "chat_annotations.jsonl").write_text(json.dumps({
+        "ts": "2026-07-13T00:00:00Z", "type": "chat_annotation", "client_message_id": "expired",
+        "action": "routed", "target": "x" * 800_000, "status": "delivered"}) + "\n", encoding="utf-8")
+    real_o_binary = getattr(_os, "O_BINARY", None)
+    fake_o_binary = real_o_binary if real_o_binary is not None else 1 << 26
+    opened, real_open = [], _os.open
+
+    def spy_open(path, flags, *args, **kwargs):
+        opened.append((str(path), flags))
+        return real_open(path, flags if real_o_binary is not None else flags & ~fake_o_binary, *args, **kwargs)
+
+    monkeypatch.setattr(_os, "O_BINARY", fake_o_binary, raising=False)
+    monkeypatch.setattr(project_dialogue.os, "open", spy_open)
+    assert append_chat_annotation(tmp_path, "also-expired", action="routed", status="delivered")
+    monkeypatch.undo()
+    rewrites = [flags for path, flags in opened if ".chat_annotations.jsonl.tmp." in path]
+    assert rewrites and all(flags & fake_o_binary for flags in rewrites)
+    assert (logs / "chat_annotations.jsonl").read_bytes() == b""
+
 def test_chat_annotation_compaction_keeps_receipts_that_address_no_message(tmp_path):
     """A steer the agent authored itself is answered by a receipt keyed on its
     routing token, and its only reader is the tool waiting on `routing_wait`.
