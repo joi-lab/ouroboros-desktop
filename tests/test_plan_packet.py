@@ -53,31 +53,34 @@ def test_a_body_plan_carries_the_pack_inline_or_as_mandatory_reads_and_refuses_w
 def _content(**over):
     fields = dict(objective="Deliver the thing", owner_words="## OWNER WORDS\n\nmake it good", dialogue_section="## OWN ROOM DIALOGUE\n\nrows\n",
                   revision=REVISION, delta=None, cross_talk="", own_objections=[], message="First look.", evidence_section="(nothing attached)\n",
-                  first_time=True)
+                  first_time=True, snapshot_section="## OWN ROOM SNAPSHOT (this ask)\n\nlocator `chat:1@aaa` · captured T1\n")
     fields.update(over)
     return plan_packet.build_participant_content(**fields)
 
 
 def test_the_cache_stable_prefix_is_byte_identical_across_asks_while_the_plan_and_council_change():
-    """The cache boundary must be real: the objective, the owner's words and the room snapshot are
+    """The cache boundary must be real: the objective, the owner's words and the room's conversation are
     byte-identical between a first ask and a later one even though the revision, its delta, the
-    council's talk and the participant's own objections all differ (they do on every later ask)."""
+    council's talk, the participant's own objections and the room's snapshot facts (a new capture's
+    locator and time) all differ (they do on every later ask)."""
     first = _content()
     later = _content(revision={**REVISION, "n": 2, "plan": "a different approach"}, first_time=False,
                      delta={"first": False, "from": 1, "to": 2, "plan_changed": True, "plan_diff": ["-old", "+new"]},
                      cross_talk="### Ask a1\nOuroboros asked: look\n- s2 answered:\n  fine\n",
-                     own_objections=[{"id": "o1", "text": "the bar", "raised_in": "a1", "revision": 1}], message="Second look.")
+                     own_objections=[{"id": "o1", "text": "the bar", "raised_in": "a1", "revision": 1}], message="Second look.",
+                     snapshot_section="## OWN ROOM SNAPSHOT (this ask)\n\nlocator `chat:1@bbb` · captured T2\n")
     a, b = plan_packet.plan_user_stable_len(first), plan_packet.plan_user_stable_len(later)
     assert a > 0 and first[:a] == later[:b], "the cached prefix must not depend on the plan or the council's talk"
     assert "make it good" in first[:a] and "rows" in first[:a]
     assert first != later and "a different approach" in later[b:] and "a different approach" not in first
+    assert "chat:1@aaa" in first[a:] and "chat:1@bbb" in later[b:] and "chat:1@" not in first[:a]
 
 
 def test_first_time_content_is_whole_and_ordered():
     content = _content()
     order = ["## TASK OBJECTIVE", "## OWNER WORDS", "## OWN ROOM DIALOGUE", "## THE PLAN", "### Goal", "### done_when",
-             "### affected_paths", "### Plan", "## THE COUNCIL SO FAR", "## YOUR OPEN OBJECTIONS", "## WHAT OUROBOROS ASKS YOU NOW",
-             "## ATTACHED EVIDENCE"]
+             "### affected_paths", "### Plan", "## OWN ROOM SNAPSHOT", "## THE COUNCIL SO FAR", "## YOUR OPEN OBJECTIONS",
+             "## WHAT OUROBOROS ASKS YOU NOW", "## ATTACHED EVIDENCE"]
     positions = [content.index(marker) for marker in order]
     assert positions == sorted(positions)
     assert "You see this plan for the first time" in content and "a five-slide story" in content and "then the story" in content

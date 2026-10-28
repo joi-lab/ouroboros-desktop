@@ -297,7 +297,7 @@ def _prior_transcript(state_root: pathlib.Path, task_id: str, participant_row: M
 def participant_content(ctx: Any, record: Mapping[str, Any], revision: Optional[Mapping[str, Any]], participant: Participant, *,
                         message: str, manifest: Mapping[str, Any], dialogue_section: str,
                         legacy: Optional[Mapping[str, Any]] = None, state_root: Any = None, task_id: str = "",
-                        objective_author: str = "") -> str:
+                        objective_author: str = "", snapshot_section: str = "") -> str:
     """One participant's user content: whole plan the first time, the delta since the revision
     it last answered about afterwards (none before any revision: a reading of the request); the
     council since its last answer; its own open objections (an imported legacy one included: its
@@ -326,7 +326,7 @@ def participant_content(ctx: Any, record: Mapping[str, Any], revision: Optional[
         objective=_task_objective(ctx), owner_words=str(manifest.get("owner_words") or ""),
         dialogue_section=dialogue_section, revision=revision, delta=delta, cross_talk=cross_talk,
         own_objections=own, message=message, evidence_section=plan_packet.render_evidence(manifest), first_time=first_time,
-        objective_author=objective_author)
+        objective_author=objective_author, snapshot_section=snapshot_section)
 
 
 # ------------------------------------------------------------------ prepare
@@ -389,7 +389,7 @@ def prepare_ask(ctx: Any, *, record: Mapping[str, Any], revision: Optional[Mappi
         participant.slot = by_seat.get(participant.seat_id, participant.slot)
     manifest = attachment_manifest(ctx, attach, state_root=state_root, task_id=task_id, system_root=system_root, active_root=active_root)
     manifest = attach_own_dialogue(ctx, state_root, manifest, f"plan-ask-{task_id}-{ask_id}", persist=True)
-    dialogue_section = render_dialogue(manifest)
+    dialogue_section, snapshot_section = render_dialogue(manifest)  # rows before the plan, capture facts after
     try:
         system_prompt = stable_prompt(ctx, body=body, system_root=system_root, enforcement=enforcement, by_retrieval=False)
         session_prompt = stable_prompt(ctx, body=body, system_root=system_root, enforcement=enforcement, by_retrieval=True)
@@ -401,7 +401,7 @@ def prepare_ask(ctx: Any, *, record: Mapping[str, Any], revision: Optional[Mappi
         sid = participant.seat_id
         contents[sid] = participant_content(ctx, record, revision, participant, message=message, manifest=manifest,
                                             dialogue_section=dialogue_section, legacy=legacy, state_root=state_root, task_id=task_id,
-                                            objective_author=author)
+                                            objective_author=author, snapshot_section=snapshot_section)
         session_tasks[sid] = _session_task_text(session_prompt, contents[sid], str(active_root))
         _ask, prior = plan_delivery.last_answer_row(record, sid)
         if prior is None:

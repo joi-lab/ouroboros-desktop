@@ -244,11 +244,12 @@ def _participant_content(manifest):
     from ouroboros.tools import plan_packet
     from ouroboros.tools.plan_dialogue import render_dialogue
 
+    conversation, snapshot = render_dialogue(manifest)
     return plan_packet.build_participant_content(
         objective="Deliver the thing", owner_words=str(manifest.get("owner_words") or ""),
-        dialogue_section=render_dialogue(manifest), revision=_REVISION, delta=None, cross_talk="",
+        dialogue_section=conversation, revision=_REVISION, delta=None, cross_talk="",
         own_objections=[], message="First look.", evidence_section=plan_packet.render_evidence(manifest),
-        first_time=True)
+        first_time=True, snapshot_section=snapshot)
 
 
 def test_the_plan_delivery_puts_the_words_after_the_objective_and_never_trims_them(harness):

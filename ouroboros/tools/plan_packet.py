@@ -10,14 +10,15 @@ What one participant receives for one ask, in this order (DESIGN §3):
    non-body plan carries no Ouroboros governance and no navigation maps (owner 4.3=A);
 2. the PARTICIPANT part (``build_participant_content``, the user content): the task
    objective with its author (``owner_words.objective_author_line``), the owner's
-   verbatim words, then the exact own-room snapshot the delivery layer fits per seat —
+   verbatim words, then the own room's conversation the delivery layer fits per seat —
    the cache-stable prefix (``plan_user_stable_len``) — then the plan:
    whole the first time this participant sees it, afterwards the delta since the
    revision it last answered about plus the current text, and before any revision no
-   plan at all (a reading of the request); everything said in the council since the
-   ask this participant last answered in (peers' answers attributed by seat and model,
-   the mind's messages), its OWN open objections to adjudicate first, the mind's
-   message, and the attached evidence, each labelled by kind, with every omission named.
+   plan at all (a reading of the request); this ask's room snapshot facts and related
+   rooms; everything said in the council since the ask this participant last answered
+   in (peers' answers attributed by seat and model, the mind's messages), its OWN open
+   objections to adjudicate first, the mind's message, and the attached evidence, each
+   labelled by kind, with every omission named.
 
 The reply contract (``PLAN_REPLY_CONTRACT`` / ``PLAN_REPLY_SESSION_OUTPUT_SCHEMA``) is
 one JSON object ``{prose, objections[{id,text}], withdrawn[{id,why}]}``; the host never
@@ -84,9 +85,10 @@ _ROLE = (
     "Other participants' answers reach you on later asks; the first ask is blind by construction."
 )
 
-# The user content's cache-stable prefix ends where the plan begins: owner words and
-# the room snapshot are byte-identical across the asks of one task, the plan and the
-# council's talk change.
+# The user content's cache-stable prefix ends where the plan begins: the objective, the
+# owner's words and the room's conversation rows are byte-identical across the asks of
+# one task while those rows stay the same; each capture's snapshot facts (locator, counts,
+# capture time, related rooms), the plan and the council's talk follow it.
 _PLAN_MARKER = "## THE PLAN"
 
 
@@ -340,10 +342,12 @@ def build_participant_content(
     evidence_section: str,
     first_time: bool,
     objective_author: str = "",
+    snapshot_section: str = "",
 ) -> str:
     """One participant's user content for one ask (see the module docstring for the order).
     ``objective_author`` is static per task, so it rides the cache-stable prefix; a reading
-    (``revision=None``) says so after the plan marker, where everything changes per ask."""
+    (``revision=None``) says so after the plan marker, where everything changes per ask, and
+    so does ``snapshot_section`` (``plan_dialogue.render_dialogue``: what each capture changes)."""
     if revision is None:
         plan = "No plan yet: Ouroboros asks how you read the request before it writes one.\n"
     else:
@@ -355,6 +359,7 @@ def build_participant_content(
         *([owner_words + "\n"] if str(owner_words or "").strip() else []),
         dialogue_section,
         _PLAN_MARKER + "\n\n" + plan,
+        *([snapshot_section] if snapshot_section else []),
         "## THE COUNCIL SO FAR (since the ask you last answered in)\n\n"
         + (cross_talk if cross_talk else (f"Nothing yet: this is the first ask{' on this plan' if revision is not None else ''} "
                                           "and every first answer is blind.\n" if first_time else "Nothing was said since your last answer.\n")),
@@ -368,8 +373,9 @@ def build_participant_content(
 
 def plan_user_stable_len(user_content: str) -> int:
     """Byte offset where the cache-stable prefix ends: everything before the plan
-    (objective, owner words, the room snapshot) is byte-identical while the owner
-    said nothing new; the plan and the council's talk change between asks."""
+    (objective, owner words, the room's conversation rows) is byte-identical while that
+    conversation is unchanged; the snapshot facts, the plan and the council's talk change
+    between asks."""
     index = str(user_content or "").find(_PLAN_MARKER)
     return index if index > 0 else 0
 
