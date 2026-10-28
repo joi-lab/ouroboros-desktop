@@ -123,11 +123,36 @@ def test_a_release_number_decides_nothing_about_the_route():
     assert not hasattr(obs, "WAIT_MANY_MIN_VERSION")
 
 
-def test_another_received_refusal_of_the_probe_propagates_typed():
-    gateway = FakeGateway(probe=ClaudexorUnavailable("http_401", "unauthorized", status_code=401))
-    with pytest.raises(ClaudexorUnavailable) as caught:
-        obs.wait_many_supported(gateway, timeout_sec=1)
-    assert caught.value.status_code == 401 and obs._SUPPORT == {}
+def _retryable(code="store_closed"):
+    exc = ClaudexorUnavailable(code, "the store is closed for maintenance", status_code=503)
+    exc.problem = {"code": code, "message": "the store is closed for maintenance", "retryable": True}
+    return exc
+
+
+@pytest.mark.parametrize("refusal", [
+    ClaudexorUnavailable("http_401", "unauthorized", status_code=401),
+    ClaudexorUnavailable("conflict", "another writer", status_code=409),
+    _retryable("store_closed"),
+    ClaudexorUnavailable("idempotency_status_unavailable", "not now", status_code=503),
+    ClaudexorUnavailable("http_500", "boom", status_code=500),
+], ids=["401", "409", "503-retryable", "503-plain", "500"])
+def test_any_other_refusal_of_the_probe_is_not_supported_this_beat_and_not_remembered(refusal):
+    gateway = FakeGateway(sha="sha-refused", probe=refusal)
+    assert obs.wait_many_supported(gateway, timeout_sec=1) is False, "the question never blocks the old read"
+    assert obs._SUPPORT == {}, "nothing is remembered: the old read says what the refusal is"
+    gateway.probe = ACCEPTED
+    assert obs.wait_many_supported(gateway, timeout_sec=1) is True and len(gateway.probes) == 2, "asked again"
+
+
+def test_a_retryable_refusal_is_a_hole_and_a_plain_one_is_not():
+    assert obs.is_observation_hole(_retryable("store_closed")) and obs.is_observation_hole(_retryable("store_maintenance_failed"))
+    plain = ClaudexorUnavailable("idempotency_status_unavailable", "not now", status_code=503)
+    assert not obs.is_observation_hole(plain)
+    not_503 = ClaudexorUnavailable("conflict", "another writer", status_code=409)
+    not_503.problem = {"code": "conflict", "retryable": True}
+    assert not obs.is_observation_hole(not_503), "the engine's retryable word counts on its 503s only"
+    wake = obs.wait_attention(FakeGateway(waits=[_retryable()]), [("run-a", None)], wait_sec=1.0, timeout_sec=1.0)
+    assert wake.reason == "unobserved" and wake.hole is not None, "a retryable refusal of the pass is a hole, not a verdict"
 
 
 def test_a_double_without_the_seam_or_a_handshake_is_unsupported_without_a_request():

@@ -27,6 +27,12 @@ def _wake(reason, summaries, attention=()):
     return {"wakeReason": reason, "attention": list(attention), "summaries": summaries}
 
 
+def _retryable(code="store_closed"):
+    exc = ClaudexorUnavailable(code, "the store is closed for maintenance", status_code=503)
+    exc.problem = {"code": code, "message": "the store is closed for maintenance", "retryable": True}
+    return exc
+
+
 def _question(interaction_id="int-1"):
     return {"interactionId": interaction_id, "runId": "run-one", "questions": [
         {"id": "q1", "question": "Which branch?", "options": [], "multi_select": False}]}
@@ -40,6 +46,7 @@ class Engine:
     store_identity = ""
     routes = [{"method": "POST", "path": "/v2/runs/wait-many"}]
     repaired = True
+    probe_answer = None  # when set, the contract probe raises (an exception) or returns it instead
     wakes: list = []
     details: dict = {}
     requests: list = []
@@ -56,6 +63,10 @@ class Engine:
     def wait_run_attention(self, targets, *, wait_ms, timeout_sec):
         if targets == [{"runId": obs.PROBE_RUN_ID, "seen": None}]:
             Engine.probes.append(wait_ms)
+            if isinstance(Engine.probe_answer, BaseException):
+                raise Engine.probe_answer
+            if Engine.probe_answer is not None:
+                return Engine.probe_answer
             if not Engine.repaired:
                 raise ClaudexorUnavailable("invalid_request", "targets[0].seen: expected string", status_code=400)
             return _wake("timeout", [{"status": None, "pending": None, "token": None, "problem": "not_found"}])
@@ -84,7 +95,7 @@ def runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(obs, "_SUPPORT", {})
     monkeypatch.setattr(run_events, "_SUPPORT", {})
     Engine.wakes, Engine.details, Engine.requests, Engine.detail_reads, Engine.catalog = [], {}, [], [], []
-    Engine.probes, Engine.hold, Engine.repaired = [], False, True
+    Engine.probes, Engine.hold, Engine.repaired, Engine.probe_answer = [], False, True, None
     release, entered = threading.Event(), threading.Event()
     tick = body.BodyRuntime.tick
 
@@ -250,18 +261,67 @@ def test_shutdown_during_a_hold_waits_at_most_the_observers_own_tick(tmp_path, r
     assert time.monotonic() - began < _TICK_SEC + 1.0, "bounded by the observer's tick, not the engine's window"
 
 
-def test_a_catalog_hole_is_the_runs_observation_hole_and_is_absorbed_before_it_raises(tmp_path, runtime):
+def test_a_catalog_hole_never_blocks_the_old_read(tmp_path, runtime):
     instance, step = runtime
     instance._compact_wait = False
     entry = started(tmp_path)
-    hole = ClaudexorUnavailable("daemon_unreachable", "read bound expired", observation_timeout=True,
-                                observation_reason="observation_read_timeout")
-    Engine.catalog.append(hole)
-    with pytest.raises(ClaudexorUnavailable):
-        instance._observe(entry)
+    Engine.details[entry.run_id] = {"summary": {"runId": entry.run_id, "state": "running"}, "lastSeq": 1,
+                                    "pendingInteractions": []}
+    Engine.catalog.append(ClaudexorUnavailable("daemon_unreachable", "read bound expired", observation_timeout=True,
+                                               observation_reason="observation_read_timeout"))
+    step()
+    assert Engine.detail_reads == [entry.run_id], "the question could not be asked; the old read ran regardless"
+    assert instance.observation(entry.run_id)["run_state"] == "running" and instance._compact_wait is False
+
+
+@pytest.mark.parametrize("refusal", [_retryable("store_closed"),
+                                     ClaudexorUnavailable("conflict", "another writer", status_code=409)],
+                         ids=["503-retryable", "409"])
+def test_a_persistently_refused_probe_never_blocks_the_old_read_and_is_asked_again(tmp_path, runtime, refusal):
+    instance, step = runtime
+    instance._compact_wait = False
+    entry = started(tmp_path)
+    Engine.details[entry.run_id] = terminal(entry.run_id)
+    Engine.probe_answer = refusal
+    step()
+    fresh = current.run(tmp_path, entry.run_id)
+    assert fresh.terminal_state == "succeeded" and fresh.terminal_source, "the old read reached the terminal"
+    assert Engine.probes == [0] and instance._compact_wait is False
+    assert obs._SUPPORT == {}, "nothing remembered of the refusal"
+    other = started(tmp_path, rid="run-two", tid="task-two")
+    Engine.details[other.run_id] = {"summary": {"runId": other.run_id, "state": "running"}, "lastSeq": 1,
+                                    "pendingInteractions": []}
+    step()
+    assert len(Engine.probes) == 2 and other.run_id in Engine.detail_reads, "asked again next beat; read regardless"
+
+
+def test_a_retryable_refusal_of_the_pass_is_a_hole_not_a_verdict(tmp_path, runtime, caplog):
+    instance, step = runtime
+    entry = started(tmp_path)
+    Engine.wakes.append(_retryable("store_maintenance_failed"))
+    caplog.set_level(logging.WARNING, logger=body.__name__)
+    step()
     fact = instance.observation(entry.run_id)
-    assert fact["answered"] is False and fact["error_code"] == "daemon_unreachable", "the hole is this read's fact"
-    assert instance._compact_wait is False and Engine.detail_reads == []
+    assert fact["answered"] is True and fact["error_code"] == "store_maintenance_failed"
+    assert instance._compact_wait is True and obs._SUPPORT.get(("4.8.1", "sha-attention")) is True, "not switched off"
+    assert not any("compact wait unusable" in record.message for record in caplog.records)
+    Engine.wakes.append(_wake("timeout", [_summary()]))
+    step()
+    assert len(Engine.requests) == 2 and Engine.detail_reads == [], "the next pass holds again"
+
+
+def test_a_plain_refusal_of_the_pass_forgets_once(tmp_path, runtime, caplog):
+    instance, step = runtime
+    entry = started(tmp_path)
+    Engine.details[entry.run_id] = {"summary": {"runId": entry.run_id, "state": "running"}, "lastSeq": 1,
+                                    "pendingInteractions": []}
+    Engine.wakes.append(ClaudexorUnavailable("conflict", "another writer", status_code=409))
+    caplog.set_level(logging.WARNING, logger=body.__name__)
+    step()
+    assert instance._compact_wait is False and obs._SUPPORT.get(("4.8.1", "sha-attention")) is False
+    assert sum("compact wait unusable" in record.message for record in caplog.records) == 1
+    step()
+    assert Engine.detail_reads == [entry.run_id] and len(Engine.requests) == 1
 
 
 def test_a_refused_or_malformed_pass_returns_the_observer_to_its_old_beat_once(tmp_path, runtime, caplog):

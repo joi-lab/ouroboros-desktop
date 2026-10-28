@@ -527,7 +527,21 @@ def test_a_busy_answer_to_the_compact_wait_is_an_observation_hole_like_a_read():
     assert caught.value.observation_answered is True
 
 
-def _repaired_engine(tmp_path, monkeypatch, *, events, wait_many=None, catalog=None, repaired=True,
+@pytest.mark.parametrize("body,hole", [
+    ({"code": "store_closed", "message": "closed", "retryable": True}, True),
+    ({"code": "store_maintenance_failed", "message": "failed", "retryable": True}, True),
+    ({"code": "idempotency_status_unavailable", "message": "not now"}, False),
+], ids=["store_closed", "store_maintenance_failed", "plain-503"])
+def test_a_retryable_503_on_the_compact_wait_is_an_observation_hole_and_a_plain_one_is_not(body, hole):
+    with _scripted_gateway(lambda _request: httpx.Response(503, json=body)) as gateway:
+        with pytest.raises(gateway_module.ClaudexorUnavailable) as caught:
+            gateway.wait_run_attention([{"runId": "run-existing"}], wait_ms=0, timeout_sec=1.0)
+    assert caught.value.status_code == 503 and caught.value.code == body["code"]
+    assert caught.value.observation_timeout is hole and caught.value.observation_answered is hole
+    assert caught.value.observation_reason == (body["code"] if hole else "")
+
+
+def _repaired_engine(tmp_path, monkeypatch, *, events, wait_many=None, catalog=None, detail=None, repaired=True,
                      version="4.8.1"):
     """One observing beat of the real wait over the real gateway against a scripted engine that
     lists both observation routes and answers the contract probe as ``repaired`` says (the
@@ -569,7 +583,7 @@ def _repaired_engine(tmp_path, monkeypatch, *, events, wait_many=None, catalog=N
                                                    "message": "targets[0].seen: expected string"}))
             return wait_many(request) if wait_many else httpx.Response(200, json=quiet)
         assert path == "/v2/runs/run-x", path
-        return httpx.Response(200, json=running)
+        return detail(request) if detail else httpx.Response(200, json=running)
 
     monkeypatch.setattr(gateway_module, "ClaudexorGateway", lambda *a, **k: _scripted_gateway(handler))
     result = json.loads(delegate._delegate_wait(ctx, "run-x", since_seq=0, observation_only=True))
@@ -602,9 +616,13 @@ def test_holes_on_the_repaired_engines_observation_routes_are_quiet(tmp_path, mo
                                      wait_many=lambda _r: _busy("daemon_busy"))
     assert busy["status"] == "observation_pending" and busy["reason"] == "daemon_busy", busy
     assert busy["answered"] is True, "the engine itself answered: no outage line"
-    gone, _frames = _repaired_engine(tmp_path, monkeypatch, events=stream,
-                                     catalog=_raise(httpx.ConnectError("refused")))
+    unreachable = _raise(httpx.ConnectError("refused"))
+    gone, _frames = _repaired_engine(tmp_path, monkeypatch, events=stream, catalog=unreachable, detail=unreachable)
     assert gone["status"] == "observation_pending" and gone["reason"] == "daemon_unreachable", gone
+    # A catalog the daemon cannot answer never refuses the beat by itself: the detail read decides,
+    # and here it answers.
+    decided, frames = _repaired_engine(tmp_path, monkeypatch, events=stream, catalog=unreachable)
+    assert decided["status"] == "progress", decided
 
 
 def test_a_busy_answer_to_a_post_still_wakes_the_model(tmp_path, monkeypatch):

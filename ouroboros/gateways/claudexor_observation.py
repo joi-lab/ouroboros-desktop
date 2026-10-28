@@ -83,10 +83,12 @@ class ClaudexorObservationGateway:
         try:
             body = self._request("POST", "/v2/runs/wait-many", json_body=request, timeout_sec=bound)
         except ClaudexorUnavailable as exc:
-            # A read in POST clothing: the engine's typed "cannot serve now" is the same quiet
-            # observation hole it is for a GET. ``_problem`` stamps GETs only, since a lost
-            # answer to a mutating POST never proves the mutation was not accepted.
-            if exc.status_code == 503 and (exc.code in DAEMON_BUSY_CODES or exc.code == "daemon_stopping"):
+            # A read in POST clothing: the engine's typed "cannot serve now" (its busy and
+            # stopping codes, or any 503 it marks retryable) is the same quiet observation hole
+            # it is for a GET. ``_problem`` stamps GETs only, since a lost answer to a mutating
+            # POST never proves the mutation was not accepted.
+            if exc.status_code == 503 and (exc.code in DAEMON_BUSY_CODES or exc.code == "daemon_stopping"
+                                           or _retryable_refusal(exc)):
                 exc.observation_timeout, exc.observation_reason, exc.observation_answered = True, exc.code, True
             raise
         if not isinstance(body, dict):
@@ -139,10 +141,11 @@ def wait_many_supported(gateway: Any, *, timeout_sec: Optional[float]) -> bool:
     route accepts the problem acknowledgement. The probe (``PROBE_RUN_ID``, ``seen: null``,
     zero wait) is asked once per exact engine identity. Only a RECEIVED answer is
     remembered: 200 with the ``not_found`` row (supported), a 400 or a 200 of another shape
-    (the route rejects or predates the acknowledgement), a 404 (the route is gone). A hole
-    (our bound expiring, a transport failure, the engine's busy or stopping 503) leaves
-    support unknown: nothing is remembered, this beat reads details as before and the next
-    beat asks again. An unhandshaken transport, or a double without the seam, is ``False``
+    (the route rejects or predates the acknowledgement), a 404 (the route is gone). Anything
+    else the probe meets — a hole (our bound expiring, a transport failure, the engine's busy,
+    stopping or retryable 503) or any other refusal of it — leaves support unknown: nothing is
+    remembered, this beat reads details as before (the old read says what the refusal is) and
+    the next beat asks again. An unhandshaken transport, or a double without the seam, is ``False``
     without a request; the catalog read is the one shared with the event stream's question
     (``claudexor_run_events.route_listed``), and a hole on it propagates typed.
     """
@@ -161,12 +164,9 @@ def wait_many_supported(gateway: Any, *, timeout_sec: Optional[float]) -> bool:
             body = gateway.wait_run_attention([{"runId": PROBE_RUN_ID, "seen": None}], wait_ms=0,
                                               timeout_sec=timeout_sec)
         except ClaudexorUnavailable as exc:
-            if int(getattr(exc, "status_code", 0) or 0) in (400, 404):
-                supported = False  # received: the route rejects the acknowledgement, or is gone
-            elif is_observation_hole(exc):
+            if int(getattr(exc, "status_code", 0) or 0) not in (400, 404):
                 return False  # unknown: nothing remembered, today's reads this beat, asked again next beat
-            else:
-                raise
+            supported = False  # received: the route rejects the acknowledgement, or is gone
         else:
             supported = _accepts_acknowledgement(body)
     with _SUPPORT_LOCK:
@@ -190,12 +190,22 @@ def forget_support(gateway: Any) -> None:
 
 
 def is_observation_hole(exc: BaseException) -> bool:
-    """A read the daemon did not answer, or answered that it cannot serve now (its own
-    typed busy/stopping/recovery 503s): nothing is known about the runs, nothing was claimed."""
+    """A read the daemon did not answer, or answered that it cannot serve now (its own typed
+    busy/stopping/recovery 503s, or any 503 it marks retryable): nothing is known about the
+    runs, nothing was claimed, and nothing is remembered of it."""
     from ouroboros.gateways.claudexor import DAEMON_BUSY_CODES
 
     code = str(getattr(exc, "code", "") or "")
-    return bool(getattr(exc, "observation_timeout", False)) or code in DAEMON_BUSY_CODES or code == "daemon_stopping"
+    return (bool(getattr(exc, "observation_timeout", False)) or code in DAEMON_BUSY_CODES
+            or code == "daemon_stopping" or _retryable_refusal(exc))
+
+
+def _retryable_refusal(exc: BaseException) -> bool:
+    """A received 503 whose problem says ``retryable: true`` (``store_closed``,
+    ``store_maintenance_failed``): the engine's own word that the read is to be asked again."""
+    problem = getattr(exc, "problem", None)
+    return (int(getattr(exc, "status_code", 0) or 0) == 503 and isinstance(problem, dict)
+            and problem.get("retryable") is True)
 
 
 def detail_attention(run_id: str, detail: Dict[str, Any]) -> RunAttention:

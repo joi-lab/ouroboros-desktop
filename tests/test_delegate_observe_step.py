@@ -52,11 +52,14 @@ class Engine:
 
     repaired = True  # the route accepts the problem acknowledgement (the contract probe's answer)
 
-    def __init__(self, *, streams=(), wakes=(), details=()):
+    def __init__(self, *, streams=(), wakes=(), details=(), catalog=None, probe_answer=None):
         self.streams, self.wakes, self.details = list(streams), list(wakes), list(details)
         self.stream_opens, self.requests, self.detail_reads, self.probes = [], [], [], []
+        self.catalog, self.probe_answer = catalog, probe_answer
 
     def operations(self, *, timeout_sec=None):
+        if isinstance(self.catalog, BaseException):
+            raise self.catalog
         return list(self.routes)
 
     def open_run_events(self, run_id, after_seq, timeout_sec):
@@ -69,6 +72,8 @@ class Engine:
     def wait_run_attention(self, targets, *, wait_ms, timeout_sec):
         if targets == [{"runId": obs.PROBE_RUN_ID, "seen": None}]:
             self.probes.append(wait_ms)
+            if isinstance(self.probe_answer, BaseException):
+                raise self.probe_answer
             if not self.repaired:
                 raise ClaudexorUnavailable("invalid_request", "targets[0].seen: expected string", status_code=400)
             return _wake("timeout", [{"status": None, "pending": None, "token": None, "problem": "not_found"}])
@@ -183,6 +188,24 @@ def test_an_engine_missing_either_surface_keeps_the_detail_beat(ctx, routes):
     gateway.routes = routes
     assert delegate_observe.step(ctx, gateway, "run-s", window=1.0, since_seq=0, read_window=lambda: 30.0) is None
     assert gateway.stream_opens == [] and gateway.requests == []
+
+
+def _retryable(code="store_closed"):
+    exc = ClaudexorUnavailable(code, "the store is closed for maintenance", status_code=503)
+    exc.problem = {"code": code, "message": "the store is closed for maintenance", "retryable": True}
+    return exc
+
+
+@pytest.mark.parametrize("engine", [
+    lambda: Engine(catalog=ClaudexorUnavailable("daemon_unreachable", "read bound expired", observation_timeout=True,
+                                                observation_reason="observation_read_timeout")),
+    lambda: Engine(probe_answer=_retryable("store_closed")),
+    lambda: Engine(probe_answer=ClaudexorUnavailable("conflict", "another writer", status_code=409)),
+], ids=["catalog-hole", "probe-503-retryable", "probe-409"])
+def test_a_question_that_cannot_be_asked_hands_the_beat_to_the_detail_read(ctx, engine):
+    gateway = engine()
+    assert delegate_observe.step(ctx, gateway, "run-s", window=1.0, since_seq=0, read_window=lambda: 30.0) is None
+    assert gateway.stream_opens == [] and gateway.requests == [] and obs._SUPPORT == {}
 
 
 def test_an_engine_whose_route_rejects_the_acknowledgement_keeps_the_detail_beat(ctx):

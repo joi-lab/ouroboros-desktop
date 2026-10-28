@@ -567,13 +567,17 @@ class BodyRuntime:
 
     def _observe(self, entry):
         """One run's full detail: the addressed read a wake, a fallback beat or a problem row earns.
-        The catalog question (does this engine serve the compact wait?) is asked inside the same
-        hole boundary, off the lock: its hole is this read's hole, never a raise past the fact."""
+        The capability question (does this engine serve the compact wait?) is asked beside it, in
+        its own guard and off the lock: a question that cannot be asked this beat (a catalog hole)
+        is "not supported this beat", nothing is cached, and the old read runs regardless."""
         from ouroboros.gateways import claudexor_observation as observation
-        from ouroboros.gateways.claudexor import SHORT_POLL_TIMEOUT_SEC
+        from ouroboros.gateways.claudexor import SHORT_POLL_TIMEOUT_SEC, ClaudexorUnavailable
         gateway = self._observer_gateway()
         try:
             supported = observation.wait_many_supported(gateway, timeout_sec=SHORT_POLL_TIMEOUT_SEC)
+        except ClaudexorUnavailable:
+            supported = False
+        try:
             detail = gateway.get_run(entry.run_id, timeout_sec=SHORT_POLL_TIMEOUT_SEC)
         except BaseException as exc:
             self._absorb_refusal(entry, gateway, exc)
@@ -634,7 +638,8 @@ class BodyRuntime:
                                               timeout_sec=SHORT_POLL_TIMEOUT_SEC) if supported else None
         except ClaudexorUnavailable as exc:
             if not observation.is_observation_hole(exc):
-                # A refusal of the pass itself, or an answer outside the contract: this engine's
+                # A refusal of the pass itself, or an answer outside the contract (never a hole or
+                # the engine's own retryable 503, which this pass leaves unanswered): this engine's
                 # compact wait is unusable, so every run is read as before (logged once: the
                 # engine identity is remembered, nothing re-asks it).
                 observation.forget_support(gateway)

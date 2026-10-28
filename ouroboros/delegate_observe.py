@@ -63,9 +63,14 @@ def step(ctx: Any, gateway: Any, run_id: str, *, window: float, since_seq: Optio
     from ouroboros.gateways.claudexor_run_events import read_run_events, run_events_supported
 
     bound = min(max(0.0, float(read_window())), SHORT_POLL_TIMEOUT_SEC)
-    if bound <= 0 or not observation.wait_many_supported(gateway, timeout_sec=bound) \
-            or not run_events_supported(gateway, timeout_sec=bound):
+    if bound <= 0:
         return None
+    try:
+        if not observation.wait_many_supported(gateway, timeout_sec=bound) \
+                or not run_events_supported(gateway, timeout_sec=bound):
+            return None
+    except ClaudexorUnavailable:
+        return None  # the questions could not be asked this beat (a catalog hole): the detail beat decides
     task_id = str(getattr(ctx, "task_id", "") or "")
     key = (task_id, str(run_id))
     started = time.monotonic()
