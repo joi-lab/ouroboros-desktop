@@ -523,28 +523,6 @@ def _subtree_progressing(task_id: str, now: float, idle_timeout: float) -> bool:
     return False
 
 
-def _has_live_descendant(task_id: str) -> bool:
-    """True if any LIVE (RUNNING or PENDING) task is a descendant of task_id (in-memory, no
-    I/O). Used to recognise an orchestrator at kill time so it is NOT blind-retried — a
-    blind retry would replay the plan and re-spawn the whole subtree (the timeout storm).
-    PENDING is included: a parent can time out while its children are merely QUEUED (worker
-    saturation / project lease), and those queued children are still its live subtree.
-    """
-    if not task_id:
-        return False
-    for tid, m in list(_queue().RUNNING.items()):
-        if tid == task_id or not isinstance(m, dict):
-            continue
-        if _queue()._is_descendant_of(m.get("task") if isinstance(m.get("task"), dict) else {}, task_id):
-            return True
-    for t in list(_queue().PENDING):
-        if not isinstance(t, dict) or str(t.get("id") or "") == task_id:
-            continue
-        if _queue()._is_descendant_of(t, task_id):
-            return True
-    return False
-
-
 def _has_pending_descendant(task_id: str) -> bool:
     """True if any PENDING (queued, not yet assigned) task is a descendant of task_id. A
     parent whose children are merely WAITING for worker capacity (saturation / project lease)
@@ -748,7 +726,7 @@ def _enforce_task_timeouts_locked(
 
         # Variant A: hand the ENTIRE teardown to the background reaper so the loop tick
         # stays fast and the terminal write happens only AFTER kill/join. Live-RUNNING
-        # facts (the orchestrator flag) freeze HERE; neither hard bound requests a retry.
+        # facts freeze HERE; neither hard bound requests a retry.
         # Linearize the timeout decision against cancellation before withdrawing
         # RUNNING.  When an intent already owns either this physical attempt or
         # its proven logical retry root, yield the whole rail: cancellation
@@ -807,8 +785,6 @@ def _enforce_task_timeouts_locked(
 
         # Only independent hard bounds reach this memory-only reaper queue.
         # Confirmed-dead worker recovery retains its separate crash retry policy.
-        orchestrator = _queue()._has_live_descendant(task_id)
-
         _queue()._ensure_reaper_started()
         _queue()._reap_queue.put({
             "worker_id": worker_id,
@@ -827,9 +803,6 @@ def _enforce_task_timeouts_locked(
             "hb_stale": hb_stale,
             "deadline_reached": deadline_reached,
             "ceiling_reached": ceiling_reached,
-            "orchestrator": orchestrator,
-            "will_retry": False,
-            "retry_task_id": "",
             "incident_toast_once": f"{task_id}:{terminal_reason}:{int(finalization_requested_at or now)}",
         })
         _queue().persist_queue_snapshot(reason="task_timeout_reap_queued")

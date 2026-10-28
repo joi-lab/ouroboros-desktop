@@ -310,68 +310,6 @@ def _admit_project_scope(
     return None
 
 
-def bind_retry_to_origin_project(
-    drive_root: Any, task: dict, task_id: str, retry_task_id: str,
-) -> str:
-    """Carry a timed-out root's Project onto the retry that replaces it.
-
-    A retry is the SAME work under a new physical id, so it belongs to the room
-    the work already has (DEVELOPMENT "the captured reference is the identity of
-    the work"). Before this, the new id copied the origin ref but carried no
-    binding, and the retried work painted a Main card offering "Turn into
-    project" until some later implicit act adopted it. The predecessor's own
-    binding answers first — it is the SSOT for that task's project — and the
-    origin-keyed lookup covers a root that was never bound itself while another
-    task id of the same owner message was. The new row reuses the predecessor's
-    stored origin BY VALUE, so the retry joins that message's one convertible
-    unit instead of starting a second.
-
-    The reaper calls this INSIDE its retry admission transaction, under the same
-    ``origin_claim_lock`` every implicit claim holds, and only once cancellation
-    can no longer win the boundary: ``bind_task_to_project`` is immutable, so a
-    bound-but-never-admitted retry id would answer ``project_id_for_task``
-    forever. Creates no project and never raises — a refused bind (a project that
-    stopped accepting them after admission) or an unreadable store leaves the retry unbound and
-    is disclosed as ``project_binding_failed``. Returns the project the retry was
-    bound to, "" when there was nothing to inherit.
-    """
-    tid = str(retry_task_id or "").strip()
-    origin_id = str(task_id or "").strip()
-    admission_basis = task.get("_project_admission")
-    if (not tid or not origin_id or tid == origin_id
-            or isinstance(admission_basis, dict) and admission_basis.get("project") is None):
-        return ""  # scope-only work has no room binding to inherit
-    from ouroboros.projects_registry import (
-        bind_task_to_project,
-        project_binding_for_task,
-    )
-
-    origin = _origin_from_mapping(task, absent="mid_task_no_origin")
-    try:
-        predecessor = project_binding_for_task(drive_root, origin_id) or {}
-        pid = (str(admission_basis.get("project_id") or "") if admission_basis is not None else
-               str(predecessor.get("project_id") or ""))
-    except Exception as exc:
-        _report_binding_failure(tid, "", exc, path="timeout_retry_admission",
-                                reason="project_binding_unreadable", drive_root=drive_root)
-        return ""
-    if not pid:
-        return ""
-    if isinstance(predecessor.get("source_ref"), dict):
-        origin = {"ref": dict(predecessor["source_ref"])}
-        if isinstance(predecessor.get("source_text"), str):
-            origin["text"] = predecessor["source_text"]
-    elif predecessor.get("origin_absent"):
-        origin = {"absent": str(predecessor["origin_absent"])}
-    try:
-        bind_task_to_project(drive_root, tid, pid, origin=origin, admission_basis=admission_basis)
-    except Exception as exc:
-        _report_binding_failure(tid, pid, exc, path="timeout_retry_admission",
-                                drive_root=drive_root)
-        return ""
-    return pid
-
-
 def promote_chat_to_task(evt: dict, ctx: Any) -> dict:
     """Enqueue a first-class pooled owner task from a conversation-lane promote.
     The task carries the originating ``chat_id`` (its live card and replies

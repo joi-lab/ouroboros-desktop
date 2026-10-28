@@ -38,7 +38,7 @@ import re
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from ouroboros.deadline_utils import parse_deadline_ts, utc_now
 from ouroboros.utils import (
@@ -292,6 +292,9 @@ def _load(drive_root: Any) -> Dict[str, Any]:
     if isinstance(data, dict):
         data.setdefault("probes", {})
         data.setdefault("owner_acks", {})
+        # Model-global rows older releases learned (effort bands, rejected parameters) stay
+        # loadable and every writer carries them forward; nothing reads them. Exact-route
+        # request adaptation belongs to ``request_wire_recovery``.
         data.setdefault("effort_ceilings", {})
         data.setdefault("effort_floors", {})
         data.setdefault("rejected_params", {})
@@ -392,166 +395,6 @@ def _age_seconds(ts: str) -> float:
     if parsed is None:
         return float("inf")
     return max(0.0, (utc_now() - parsed).total_seconds())
-
-
-# --- Learned reasoning-effort ceilings (v6.57.0) -------------------------------
-# A COMPLETELY SEPARATE namespace ("effort_ceilings") from the context-window
-# evidence (probes/owner_acks) — it shares only the store file and the lock.
-# It NEVER touches window records, so the BIBLE P3 ≥1M scope-review floor
-# evidence path is untouched. Value shape:
-#   {"ceiling": "<effort>", "observed_at": iso, "reason": "provider_rejected"}
-# KEYING: this historical namespace uses NORMALIZED MODEL IDENTITY rather than
-# the exact route fingerprint used by current request-wire compatibility. It is
-# retained for diagnostics and upgrade regression compatibility only; production
-# request construction, scheduling, and recovery do not consult it as authority.
-
-def record_effort_ceiling(drive_root: Any, fingerprint: str, ceiling: str) -> None:
-    """Persist the learned reasoning-effort ceiling. The key is the normalized
-    model identity (see the namespace note above), not a full route fingerprint.
-    Best-effort, never raises; a lower ceiling always wins (a route never silently
-    regains an effort a provider already rejected within the cache window)."""
-    fp = str(fingerprint or "").strip()
-    ceil = str(ceiling or "").strip().lower()
-    if not fp or not ceil:
-        return
-    try:
-        with _store_transaction(drive_root):
-            data = _load(drive_root)
-            entry = data.setdefault("effort_ceilings", {}).get(fp) or {}
-            data["effort_ceilings"][fp] = {
-                "ceiling": ceil,
-                "observed_at": utc_now_iso(),
-                "reason": "provider_rejected",
-                "prev": entry.get("ceiling") or "",
-            }
-            _save(drive_root, data)
-    except Exception:
-        log.debug("record_effort_ceiling failed", exc_info=True)
-
-
-def get_effort_ceiling(drive_root: Any, fingerprint: str) -> str:
-    """Return the learned effort ceiling for a normalized model identity, or ""
-    when none. Fail-open (any error → "")."""
-    fp = str(fingerprint or "").strip()
-    if not fp:
-        return ""
-    try:
-        entry = _read(drive_root).get("effort_ceilings", {}).get(fp)
-        return str((entry or {}).get("ceiling") or "").strip().lower()
-    except Exception:
-        return ""
-
-
-# --- Learned reasoning-effort floors (v6.73.2) ----------------------------------
-# Historical VALUE-TOO-LOW mirror of effort_ceilings. Some endpoints make
-# reasoning mandatory, but current adaptation is exact-route, success-confirmed
-# request-wire evidence. These model-global rows remain diagnostic/read-compatible.
-# Historical lifecycle remains readable: ceilings are sticky, while floors expire
-# like rejected_params. Since normal dispatch ignores this namespace, expiry changes
-# diagnostic state only; exact-route request-wire evidence owns runtime self-healing.
-
-_EFFORT_FLOORS_TTL_SEC = 14 * 24 * 3600.0
-
-
-def record_effort_floor(drive_root: Any, fingerprint: str, floor: str) -> None:
-    """Persist the learned reasoning-effort floor for a normalized model identity.
-
-    Best-effort, never raises; a HIGHER floor always wins on merge (mirror of the
-    ceiling's lower-wins rule — a provider-required minimum is never silently
-    lowered within the cache window)."""
-    from ouroboros.config import effort_rank
-    fp = str(fingerprint or "").strip()
-    value = str(floor or "").strip().lower()
-    if not fp or not value:
-        return
-    try:
-        with _store_transaction(drive_root):
-            data = _load(drive_root)
-            store = data.setdefault("effort_floors", {})
-            entry = store.get(fp) or {}
-            prev = str(entry.get("floor") or "").strip().lower()
-            fresh = _age_seconds(str(entry.get("observed_at") or "")) < _EFFORT_FLOORS_TTL_SEC
-            if fresh and prev and effort_rank(prev) >= effort_rank(value):
-                value = prev
-            store[fp] = {
-                "floor": value,
-                "observed_at": utc_now_iso(),
-                "reason": "provider_required",
-                "prev": prev,
-            }
-            _save(drive_root, data)
-    except Exception:
-        log.debug("record_effort_floor failed", exc_info=True)
-
-
-def get_effort_floor(drive_root: Any, fingerprint: str) -> str:
-    """Return the non-expired learned effort floor for a normalized model
-    identity, or "" (fail-open: absence, expiry, or any error → "")."""
-    fp = str(fingerprint or "").strip()
-    if not fp:
-        return ""
-    try:
-        entry = _read(drive_root).get("effort_floors", {}).get(fp) or {}
-        if _age_seconds(str(entry.get("observed_at") or "")) >= _EFFORT_FLOORS_TTL_SEC:
-            return ""
-        return str(entry.get("floor") or "").strip().lower()
-    except Exception:
-        return ""
-
-
-# --- Learned rejected request parameters (v6.69.0) ------------------------------
-# Same design as effort_ceilings: a separate namespace ("rejected_params") keyed by
-# the NORMALIZED MODEL IDENTITY, sharing only the store file and lock. A provider
-# rejection of an optional request parameter (e.g. temperature on a reasoning
-# model) is learned reactively in llm.py; persisting it here means a NEW process
-# (worker restart, review subprocess) strips the parameter proactively instead of
-# re-paying a 404 + retry on its first call. Entries EXPIRE (providers change
-# supported_parameters independently of releases — the mutable-external-fact rule
-# in DEVELOPMENT.md), after which the reactive retry re-learns if still true.
-# Fail-open everywhere: any error → no durable knowledge → today's behavior.
-
-_REJECTED_PARAMS_TTL_SEC = 14 * 24 * 3600.0
-
-
-def record_rejected_params(drive_root: Any, fingerprint: str, params: Any) -> None:
-    """Persist provider-rejected optional request parameters for a model identity.
-
-    Merges with (non-expired) existing knowledge; best-effort, never raises."""
-    fp = str(fingerprint or "").strip()
-    values = sorted({str(p).strip() for p in (params or []) if str(p or "").strip()})
-    if not fp or not values:
-        return
-    try:
-        with _store_transaction(drive_root):
-            data = _load(drive_root)
-            store = data.setdefault("rejected_params", {})
-            entry = store.get(fp) or {}
-            existing = entry.get("params") if _age_seconds(str(entry.get("observed_at") or "")) < _REJECTED_PARAMS_TTL_SEC else []
-            merged = sorted({*(existing or []), *values})
-            store[fp] = {
-                "params": merged,
-                "observed_at": utc_now_iso(),
-                "reason": "provider_rejected",
-            }
-            _save(drive_root, data)
-    except Exception:
-        log.debug("record_rejected_params failed", exc_info=True)
-
-
-def get_rejected_params(drive_root: Any, fingerprint: str) -> Set[str]:
-    """Return non-expired learned rejected parameters for a model identity.
-
-    Empty set on absence, expiry, or any error (fail-open)."""
-    fp = str(fingerprint or "").strip()
-    if not fp:
-        return set()
-    try:
-        entry = _read(drive_root).get("rejected_params", {}).get(fp) or {}
-        if _age_seconds(str(entry.get("observed_at") or "")) >= _REJECTED_PARAMS_TTL_SEC:
-            return set()
-        return {str(p) for p in (entry.get("params") or []) if str(p or "").strip()}
-    except Exception:
-        return set()
 
 
 # --- Measured tokenizer density -------------------------------------------------

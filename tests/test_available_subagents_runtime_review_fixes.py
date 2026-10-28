@@ -409,15 +409,16 @@ def test_api_actor_strips_only_the_canonical_local_marker():
 
 @pytest.mark.parametrize("route_kind", ["api_model", "agent_session"])
 def test_configured_actor_preserves_requested_effort_until_request_wire(
-    monkeypatch, route_kind,
+    monkeypatch, tmp_path, route_kind,
 ):
     import ouroboros.claudexor_daemon as daemon
     import ouroboros.subagents as subagents
-    from ouroboros.llm import LLMClient
     from ouroboros.subagent_runtime import resolve_configured_actor_dispatch
+    from tests._shared import write_legacy_capability_rows
 
     nanny_model = f"openai/review-fix-{route_kind}"
-    monkeypatch.setitem(LLMClient._EFFORT_CEILING_CACHE, nanny_model, "low")
+    monkeypatch.setattr("ouroboros.config.DATA_DIR", tmp_path)
+    write_legacy_capability_rows(tmp_path, effort_ceilings={nanny_model: "low"})
     if route_kind == "api_model":
         monkeypatch.setattr(
             "ouroboros.provider_models.model_has_credentials", lambda _model: True,

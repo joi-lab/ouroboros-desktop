@@ -195,7 +195,7 @@ def test_owner_wait_spares_only_idle_timeout(pool, monkeypatch, hard_axis):
     queue._enforce_task_timeouts_locked(workers, time.time(), 0, {})
     if hard_axis:
         job = reaps.get_nowait()
-        assert job["terminal_reason"] == hard_axis and not job["will_retry"]
+        assert job["terminal_reason"] == hard_axis and not {"will_retry", "retry_task_id"} & set(job)
     else:
         assert reaps.empty() and "owner" in workers.RUNNING
 

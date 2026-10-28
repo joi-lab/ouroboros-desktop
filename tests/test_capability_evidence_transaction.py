@@ -156,9 +156,6 @@ def test_best_effort_observations_skip_a_busy_store_without_failing(held):
                                           base_url=OPENROUTER, field="max_completion_tokens", source="a catalog")
     context_window.record_observation(held.root, "observed-route", accepted=50000)
     ce.record_token_density(held.root, "vendor/dense", prompt_chars=40000, prompt_tokens=11000)
-    ce.record_effort_ceiling(held.root, "vendor/x", "low")
-    ce.record_effort_floor(held.root, "vendor/x", "low")
-    ce.record_rejected_params(held.root, "vendor/x", ["temperature"])
     assert not ce._DENSITY_MEMO  # no false "already recorded" throttle after a skipped write
     assert ce._store_path(held.root).read_bytes() == held.before
     assert _thread_lock_free()  # each refused acquire gave the process lock back

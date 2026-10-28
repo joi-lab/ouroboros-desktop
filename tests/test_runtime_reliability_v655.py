@@ -193,14 +193,14 @@ def test_safety_mode_owner_post_route_decodes_percent_encoding():
 
 
 # ---------------------------------------------------------------------------
-# 1.2 — response_format is droppable request intent in LLMClient
+# 1.2 — response_format is optional intent the model catalogue may report unsupported
 
 
 def test_response_format_in_droppable_params():
     from ouroboros.llm import _OPTIONAL_DROPPABLE_PARAMS
 
     assert "response_format" in _OPTIONAL_DROPPABLE_PARAMS
-    assert "reasoning_effort" in _OPTIONAL_DROPPABLE_PARAMS  # round 6: rejected effort hint strips, not fails
+    assert "reasoning_effort" in _OPTIONAL_DROPPABLE_PARAMS  # catalogue says unsupported: dropped at send, not failed
 
 
 def test_chat_signature_accepts_response_format():

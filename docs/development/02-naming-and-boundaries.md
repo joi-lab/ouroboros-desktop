@@ -220,10 +220,9 @@ integrity check on a known identity and as content-addressing where the content 
 identity. Enforce the reference as a required typed argument at the consuming seam (a
 valid ref or a closed-enum absence reason; omission raises), so no call site can skip it
 (`bind_task_to_project(..., *, origin)`, `tests/test_projects_v6640.py`); for fuzzy
-entities use `semantic_dedup`, never string equality. That reference is also the
-identity of the work: every task id minted from the same owner message inherits the
-origin's project binding, because a message is one convertible unit (ARCHITECTURE §6
-"Project binding by task and by origin"; `tests/test_retry_project_binding.py`).
+entities use `semantic_dedup`, never string equality. An origin records provenance,
+not shared work identity: moving one task does not move siblings from the same
+message (ARCHITECTURE §6 "Project placement"; `tests/test_one_work_placement.py`).
 
 One named exception: a verification receipt with no ingress point reconciles by one
 typed identity key, never across kinds, because per-component fallbacks are
