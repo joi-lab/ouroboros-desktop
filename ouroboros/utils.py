@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
@@ -817,14 +817,21 @@ def jsonl_chain_handles(
     path: pathlib.Path, *, strict: bool = False,
     start_offset: Optional[int] = None,
     snapshot: Optional[Dict[str, Any]] = None,
-) -> Iterator[List[Tuple[pathlib.Path, Any]]]:
+    sequential: bool = False,
+) -> Iterator[Iterable[Tuple[pathlib.Path, Any]]]:
     """Open binary handles for a rotated JSONL chain; the context owns closing.
 
-    By default yield every ``(path, handle)`` in archive filename order, with
-    the initially opened live generation last. Open live BEFORE enumeration;
-    device/inode identity excludes its renamed archive alias after rotation.
-    On Windows that open handle can prevent the rotator's rename. This is not
-    an atomic content snapshot, a JSON-row deduplicator, or an event-time sort.
+    By default yield the list of every ``(path, handle)`` in archive filename
+    order, with the initially opened live generation last. Open live BEFORE
+    enumeration; device/inode identity excludes its renamed archive alias after
+    rotation. On Windows that open handle can prevent the rotator's rename. This
+    is not an atomic content snapshot, a JSON-row deduplicator, or an event-time sort.
+
+    ``sequential`` yields the same pairs lazily: each archive opens when reached
+    and closes when the caller moves on, so a whole-chain pass holds the live
+    handle pinned at entry plus one archive, whatever the chain's length, and
+    reads the live generation through that handle to its EOF at read time.
+    Strict failures then raise during iteration; a lenient one skips its segment.
 
     ``start_offset`` counts bytes across the captured chain lengths, skipping
     consumed segments without opening them and seeking within selected ones.
@@ -883,15 +890,15 @@ def jsonl_chain_handles(
             raise JsonlChainUnreadable(f"shortened or missing chain at {path}")
         first = bisect_right(ends, start_offset) if start_offset is not None else 0
         stop = min(len(entries), first + 1) if snapshot is not None else len(entries)
-        handles = []
-        for index in range(first, stop):
+
+        def opened(index: int, owner: contextlib.ExitStack) -> Optional[Tuple[pathlib.Path, Any]]:
             segment, expected, was_live = entries[index]
             try:
                 if was_live:
                     handle = live_handle
                     if handle is None:
                         with contextlib.suppress(FileNotFoundError):
-                            handle = stack.enter_context(segment.open("rb"))
+                            handle = owner.enter_context(segment.open("rb"))
                     identity = (expected.st_dev, expected.st_ino)
                     actual = os.fstat(handle.fileno()) if handle is not None else None
                     if actual is None or (actual.st_dev, actual.st_ino) != identity:
@@ -905,18 +912,30 @@ def jsonl_chain_handles(
                                     break
                         else:
                             raise JsonlChainUnreadable(f"original live generation missing at {path}")
-                        handle = stack.enter_context(segment.open("rb"))
+                        handle = owner.enter_context(segment.open("rb"))
                 else:
-                    handle = stack.enter_context(segment.open("rb"))
+                    handle = owner.enter_context(segment.open("rb"))
                 if start_offset is not None:
                     if os.fstat(handle.fileno()).st_size < expected.st_size:
                         raise JsonlChainUnreadable(f"shortened chain segment {segment}")
                     handle.seek(max(0, start_offset - (ends[index - 1] if index else 0)))
-                handles.append((segment, handle))
+                return segment, handle
             except OSError as exc:
                 if strict:
                     raise JsonlChainUnreadable(f"cannot read {segment}: {exc}") from exc
-        yield handles
+                return None
+
+        def one_at_a_time() -> Iterator[Tuple[pathlib.Path, Any]]:
+            for index in range(first, stop):
+                with contextlib.ExitStack() as owner:
+                    pair = opened(index, owner)
+                    if pair:
+                        yield pair
+
+        if sequential:
+            yield stack.enter_context(contextlib.closing(one_at_a_time()))
+        else:
+            yield [pair for pair in (opened(index, stack) for index in range(first, stop)) if pair]
 
 def iter_jsonl_chain_objects(
     path: pathlib.Path,

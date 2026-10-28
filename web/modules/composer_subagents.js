@@ -3,14 +3,14 @@
  * Effort, saving its room's subagents mode, Off · Auto · Swarm, through the owner endpoint. Each room keeps its own
  * value (a new Project copies Main's once); a change applies to new steps in this chat while running helpers finish.
  * Its mark is a small network (owner 27.10, G): Ouroboros joined by threads to three helpers; none lit for Off, one
- * helper and its thread for Auto, every helper and the threads between them for Swarm. Closed, it says the value: Swarm in the switched-on capsule's soft crimson, Off muted,
- * Auto plain. When Settings › Agents has subagents off, or they are not set up yet, it says Off with a lock: only Off
- * can be chosen, the reason is said and Open Settings goes there; the room's own value is kept for when they are on.
+ * helper and its thread for Auto, every helper and the threads between them for Swarm. Closed, it says the value: Off
+ * muted, Auto and Swarm plain, like the neighbours' values; the lit network tells them apart (owner 28.10: no red
+ * fill). When Settings › Agents has subagents off, or they are not set up yet, it says Off with a lock: only Off can be
+ * chosen, the hint says why and its Open Settings goes there; the room's own value is kept for when they are on.
  *
- * The opened body is one component, `createSubagentsChoice()`: the choice (the strip of three values under the glass
- * thumb Context's modes use) and what it means (the chosen value's one line, the rule line, or the reason and Open
- * Settings). The capsule hosts the strip on the composer's line and the note under that line, so the row grows upward
- * and the field stays.
+ * The opened body is one component, `createSubagentsChoice()`: the strip of three values under the glass thumb
+ * Context's modes use, and what the hint (ui_hint.js) says about it: the chosen value's meaning, or the reason and
+ * Open Settings. The hint stands above the open capsule, so nothing in the composer moves.
  */
 import { haptic } from './haptics.js';
 
@@ -21,7 +21,6 @@ export const SUBAGENT_MEANINGS = Object.freeze({
     auto: 'Ouroboros decides when helpers are worth it.',
     swarm: "Don't economise: independent views of several models, critics, one synthesis. Costs more.",
 });
-export const SUBAGENT_RULE = 'Applies to new steps in this chat; running helpers finish.';
 // Why only Off can be chosen (`subagents_availability` in the room's state); `available` or an unknown answer locks nothing.
 export const SUBAGENT_LOCKS = Object.freeze({
     disabled: 'Subagents are turned off in Settings › Agents',
@@ -49,15 +48,16 @@ export function subagentsView(mode, availability = 'available') {
     return {
         mode: shown, stored: modeOf(mode), locked: Boolean(lock), reason: lock, word: WORDS[shown],
         meaning: SUBAGENT_MEANINGS[shown],
-        said: lock ? `Subagents: Off. ${lock}.` : `Subagents: ${WORDS[shown]}. ${SUBAGENT_MEANINGS[shown]} ${SUBAGENT_RULE}`,
+        said: lock ? `Subagents: Off. ${lock}.` : `Subagents: ${WORDS[shown]}. ${SUBAGENT_MEANINGS[shown]}`,
     };
 }
 
 /**
- * The opened body. `onChoose(mode)` saves a choice; `onOpenSettings()` goes to Settings › Agents. Returns its two
- * parts and `paint(view)` (a subagentsView), `chosen()` (the chosen value's node) and `step(event)` for the keyboard.
+ * The opened body. `onChoose(mode)` saves a choice. Returns the strip and `paint(view)` (a subagentsView), `chosen()`
+ * (the chosen value's node), `step(event)` for the keyboard and `say(preview)`, the hint's words: the meaning of the
+ * chosen value or of the one a mouse rests on, or the reason Settings gives with Open Settings as its action.
  */
-export function createSubagentsChoice({ doc = globalThis.document, onChoose = () => {}, onOpenSettings = () => {} } = {}) {
+export function createSubagentsChoice({ doc = globalThis.document, onChoose = () => {} } = {}) {
     const strip = doc.createElement('div');
     strip.className = 'chat-context-strip chat-subagents-strip';
     strip.setAttribute('role', 'radiogroup');
@@ -67,20 +67,6 @@ export function createSubagentsChoice({ doc = globalThis.document, onChoose = ()
         `<button class="chat-seg ui-hit-area" type="button" role="radio" tabindex="-1" aria-checked="false" data-mode="${mode}">`
         + `<span class="chat-seg-text">${WORDS[mode]}</span></button>`).join('');
     const segs = Array.from(strip.querySelectorAll('.chat-seg'));
-
-    const note = doc.createElement('div');
-    note.className = 'chat-subagents-note';
-    note.setAttribute('data-capsule-note', '');  // the line under the strip, never a peer the strip is fitted beside
-    note.hidden = true;
-    note.innerHTML = '<p class="chat-subagents-meaning"></p><p class="chat-subagents-rule"></p>'
-        + '<div class="chat-subagents-locked"><p class="chat-subagents-reason"></p>'
-        + '<button type="button" class="btn btn-default btn-sm chat-subagents-settings ui-hit-area">Open Settings</button></div>';
-    const meaning = note.querySelector('.chat-subagents-meaning');
-    const rule = note.querySelector('.chat-subagents-rule');
-    const locked = note.querySelector('.chat-subagents-locked');
-    const reason = note.querySelector('.chat-subagents-reason');
-    const settings = note.querySelector('.chat-subagents-settings');
-    rule.textContent = SUBAGENT_RULE;
 
     let view = subagentsView('auto');
     let open = false;
@@ -104,14 +90,11 @@ export function createSubagentsChoice({ doc = globalThis.document, onChoose = ()
             strip.style.setProperty('--thumb-left', `${seg.offsetLeft}px`);
             strip.style.setProperty('--thumb-width', `${seg.offsetWidth}px`);
         }
-        // Words are written only when they change: the row's text observer refits on every write
-        // (composer_owner_controls.js), and a refit paints again.
-        if (meaning.textContent !== view.meaning) meaning.textContent = view.meaning;
-        if (reason.textContent !== view.reason) reason.textContent = view.reason;
-        meaning.hidden = view.locked;
-        rule.hidden = view.locked;
-        locked.hidden = !view.locked;
-        note.hidden = !open;
+    }
+    function say(preview = '') {
+        if (view.locked) return { text: `${view.reason}.`, action: 'Open Settings', rule: '' };
+        const mode = SUBAGENT_MODES.includes(preview) ? preview : view.mode;
+        return { word: WORDS[mode], text: SUBAGENT_MEANINGS[mode] };
     }
 
     const onClick = (event) => {
@@ -120,9 +103,7 @@ export function createSubagentsChoice({ doc = globalThis.document, onChoose = ()
         haptic('tick');  // another value, chosen by a press (haptics.js)
         onChoose(seg.dataset.mode);
     };
-    const onSettings = () => onOpenSettings();
     strip.addEventListener('click', onClick);
-    settings.addEventListener('click', onSettings);
 
     /** Arrows, Home and End move among the values that can be chosen and choose the one they land on. */
     function step(event) {
@@ -140,12 +121,8 @@ export function createSubagentsChoice({ doc = globalThis.document, onChoose = ()
     }
 
     return {
-        strip, note, segs, paint, chosen, step,
-        destroy() {
-            strip.removeEventListener('click', onClick);
-            settings.removeEventListener('click', onSettings);
-            note.remove();
-        },
+        strip, segs, paint, chosen, step, say,
+        destroy() { strip.removeEventListener('click', onClick); },
     };
 }
 
@@ -175,22 +152,17 @@ export function createSubagentsControl({
     let saving = null, lastOk = true, destroyed = false;
     let control = null;
 
-    const choice = createSubagentsChoice({
-        doc,
-        onChoose: (mode) => choose(mode),
-        onOpenSettings: () => { control?.setOpen(false); openSettings(); },
-    });
+    const choice = createSubagentsChoice({ doc, onChoose: (mode) => choose(mode) });
     el.querySelector('.chat-capsule-body').append(choice.strip);
-    row.append(choice.note);
 
     function render() {
         const view = subagentsView(stored, availability);
         el.dataset.mode = view.mode;
         el.dataset.locked = String(view.locked);
         if (value.textContent !== view.word) value.textContent = view.word;
-        head.title = view.said;
         head.setAttribute('aria-label', view.said);
         choice.paint(view, { isOpen: Boolean(control?.isOpen()) });
+        control?.sayHint();
     }
 
     function choose(mode) {
@@ -227,7 +199,8 @@ export function createSubagentsControl({
     };
     control = createCapsule({
         el, row, kind: 'subagents', strip: choice.strip, segs: choice.segs, render, focusTarget: choice.chosen,
-        note: choice.note, padMax: 11, onLayout, onSettled, win, doc,
+        say: choice.say, onHintAction: () => { control?.setOpen(false); openSettings(); }, padMax: 11, onLayout,
+        onSettled, win, doc,
         afterOpen: revealChosen,
         afterOverflow: () => revealChosen(),
     });

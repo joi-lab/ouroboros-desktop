@@ -436,19 +436,19 @@ def rows_after(path: pathlib.Path, offset: int) -> Tuple[List[Dict[str, Any]], i
 
 
 def _iter_rows(path: pathlib.Path, *, strict: bool = False, start_offset: Optional[int] = None) -> Iterator[Dict[str, Any]]:
-    """Custody rows across the ROTATED CHAIN (archive segments + live file): the
-    importer's one fold (``strict``: an unreadable segment or a read error raises
-    its ``OSError`` instead of amputating the chain; ``start_offset``: from that
-    byte of the chain) and the explicit forensic replays.
+    """Custody rows across the ROTATED CHAIN (archive segments + live file): the importer's
+    fold, the explicit rebuild and the forensic replay (``strict``: an unreadable segment or a
+    read error raises its ``OSError`` instead of amputating the chain; ``start_offset``: from
+    that byte of the chain).
 
-    The event log rotates like chat/progress (CPL4-C1), so a full replay must
-    read ``archive/events_*.jsonl`` before the live file or a rotation would
-    silently amputate every older run's custody. ``jsonl_chain_handles`` makes
-    the traversal rotation-race-safe (open-live-first + inode dedup).
+    Archives are read before the live file, so a rotation never amputates older runs' custody;
+    ``jsonl_chain_handles`` keeps the walk rotation-race-safe (open-live-first + inode dedup) and
+    sequential (the pinned live handle plus one archive), so a long chain under a low descriptor
+    limit is read whole, never cut where the opens ran out.
     """
     from ouroboros.utils import jsonl_chain_handles
 
-    with jsonl_chain_handles(path, strict=strict, start_offset=start_offset) as handles:
+    with jsonl_chain_handles(path, strict=strict, start_offset=start_offset, sequential=True) as handles:
         for _, handle in handles:
             try:
                 for raw in handle:
@@ -727,9 +727,9 @@ def _unique_rows(rows: Any) -> Iterator[Dict[str, Any]]:
 
 
 def custody_rows(drive_root: Any) -> Tuple[Dict[str, Any], ...]:
-    """The forensic replay: every custody row of the retained chain, read whole. Never on
-    a bookkeeping path (those read the store's rows); audits, repair and tests only."""
-    return tuple(_unique_rows(_iter_rows(event_log_path(drive_root))))
+    """The forensic replay: every custody row of the retained chain, read whole or raising (strict).
+    Never on a bookkeeping path (those read the store's rows); audits, repair and tests only."""
+    return tuple(_unique_rows(_iter_rows(event_log_path(drive_root), strict=True)))
 
 
 def replay(drive_root: Any,

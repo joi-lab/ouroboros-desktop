@@ -439,6 +439,12 @@ def _record_routing_receipt(
                 ack_kwargs["attachment_manifest"] = attachment_manifest
             if cause:
                 ack_kwargs["cause"] = cause
+            from supervisor.events_project_routing import _routing_notice_carried, _routing_notice_reply
+
+            if _routing_notice_carried(status, cause, options, attachment_manifest):
+                # The same carrier fact the supervisor's receipt writer states (#966).
+                ack_kwargs.update(routing_notice_carrier="routing_ack", reply_to=_routing_notice_reply(
+                    ctx, {"chat_id": chat_id, "client_message_id": client_message_id}))
             ack(
                 chat_id,
                 **ack_kwargs,

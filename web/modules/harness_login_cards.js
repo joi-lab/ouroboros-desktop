@@ -351,14 +351,12 @@ export async function confirmLoginLive(harness, profileId, {
 
 export function resolvedJobProfileId(envelope) {
     // The profile a login job REALLY targets, read off the job's own record.
-    // On a legacy engine a default login carries `profileId: null` — the
-    // empty-string address the native pseudo-row answers to. On a unified
-    // engine (plan §K.4) the engine resolves a default login onto its
-    // bootstrap registry row and the job record names it, so the verify-race
-    // must ask about THAT row: no row with the empty id exists there, and an
-    // unresolved '' address would report every successful default login as
-    // unconfirmed. A named login's job names the same profile the card
-    // started with, so adopting the job's answer is safe on both engines.
+    // The engine resolves an empty family's login onto its bootstrap registry
+    // row (plan §K.4) — `claude-default`, or another id such as
+    // `claude-default-2` when that one is taken — and the job record names it,
+    // so the verify-race asks about THAT row and no sibling. A job naming no
+    // profile leaves '', which no row answers to: never a confirmation. A
+    // named login's job names the same profile the card started with.
     const raw = envelope?.job?.profileId;
     return typeof raw === 'string' ? raw : '';
 }
@@ -1518,11 +1516,9 @@ export function createLoginCardController({
         active.confirming = true;
         render();
         // The row address: the profile the card started with, upgraded to the
-        // job's OWN resolved profile when the engine names one — a unified
-        // engine resolves a default login onto its bootstrap registry row, and
-        // only that row can confirm it (resolvedJobProfileId). On a legacy
-        // engine the job carries null for a default login and the address
-        // stays the empty string, byte-identical to today.
+        // job's OWN resolved profile when the engine names one — the engine
+        // resolves an empty family's login onto its bootstrap registry row, and
+        // only that row can confirm it (resolvedJobProfileId).
         const rowAddress = active.profile
             || resolvedJobProfileId(active.envelope || {}) || '';
         const check = await confirmLoginLive(active.harness, rowAddress, {

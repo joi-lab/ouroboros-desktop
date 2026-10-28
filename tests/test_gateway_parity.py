@@ -13,6 +13,7 @@ from ouroboros.gateway.contracts import (
     AvailableSubagentsSettingsMeta,
     ChatInbound,
     ChatOutbound,
+    MessageAnnotationOutbound,
     ClaudexorCredentialProfileDeleteResponse,
     ClaudexorLoginJobProblem,
     ClaudexorLoginJobResponse,
@@ -577,12 +578,19 @@ def test_gateway_contract_endpoint_index_matches_router_and_types(tmp_path):
         "routing_token",
         "cause",
         "reasoning_effort",
+        "routing_notice_carrier",
+        "reply_to",
         "status",
         "options",
         "attachment_manifest",
         "suppress_bubble",
         "ts", "project_name", "target_task_ids", "target_titles"
     }
+    # The notice carrier is one literal pair in both mirrors: an ACK and its paired System row read the same words.
+    for cls in (MessageAnnotationOutbound, ChatOutbound):
+        carrier = get_type_hints(cls, include_extras=True)["routing_notice_carrier"]
+        assert get_args(get_args(carrier)[0]) == ("routing_ack", "system"), cls.__name__
+    assert len(re.findall(r'@property \{"routing_ack"\|"system"=\} routing_notice_carrier\b', text)) == 2
 
 
 def test_gateway_money_contracts_keep_unavailable_distinct_from_zero():

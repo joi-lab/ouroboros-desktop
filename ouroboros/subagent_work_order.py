@@ -389,6 +389,25 @@ def session_design_navigation(ctx: Any, *, target_root: str, source_root: str) -
             + navigation + digest)
 
 
+def session_constitution_pointer(ctx: Any, *, target_root: str, source_root: str) -> str:
+    """Point an own-body session at the constitution of the body it works on, beside DESIGN.
+
+    The leaf is an executor, not Ouroboros, and starts before its nanny's first turn; a path
+    and the pinned bytes' digest let its first proposals meet P1. The text is never inlined."""
+    source, _prepared = _own_body_source(ctx, target_root, source_root)
+    if source is None:
+        return ""
+    path = source / "BIBLE.md"
+    head = "\n\nCONSTITUTION DELIVERY (host instructions, separate from canonical work order)\n"
+    try:
+        digest = sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return head + f"BIBLE.md source unavailable at {path}; no constitution delivered."
+    return head + (f"This work concerns the body of Ouroboros, which {path} governs. Before your first proposal, "
+                   "read its Principle 1 (continuity, memory and the cognitive horizon); read the rest as the "
+                   f"work needs.\nSource bytes SHA-256: {digest}.")
+
+
 def session_service_directories(ctx: Any, gateway: Any, route: Any, authority: Any, *, snapshot: Any,
                                 payload: bool, execution_root: str) -> Any:
     """What ONE first start's private copy may write outside it, prepared before the binding, the host
@@ -413,7 +432,7 @@ def session_host_references(ctx: Any, *, target_root: str, source_root: str,
                             private_copy: bool = False, payload_skill: str = "", service: Any = None) -> str:
     """Host references pinned in a session's start request, computed once at first start.
 
-    Own-body DESIGN navigation and the installed instruction-skill index for any workspace;
+    Own-body DESIGN navigation and BIBLE path, and the installed instruction-skill index for any workspace;
     a skill-payload builder also gets the serving host's skill contract, whatever its input
     selection, and any other private copy its environment facts: dependency files read at the
     copy's repository root, the environment placed where the session may write (``source_root``,
@@ -421,7 +440,9 @@ def session_host_references(ctx: Any, *, target_root: str, source_root: str,
     has no copy, so it gets neither. A retry replays the recorded bytes."""
     from ouroboros.skill_catalogue import session_skill_index, skill_contract_references  # lazy skill reads
 
-    text = session_design_navigation(ctx, target_root=target_root, source_root=source_root) + session_skill_index(ctx)
+    text = (session_design_navigation(ctx, target_root=target_root, source_root=source_root)
+            + session_constitution_pointer(ctx, target_root=target_root, source_root=source_root)
+            + session_skill_index(ctx))
     if payload_skill:
         from ouroboros.body_candidate import serving_repo_dir_for
 

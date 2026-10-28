@@ -3,7 +3,7 @@
 // draft compilation is read-only and completion is one atomic transaction.
 
 import { apiClient } from './api_client.js';
-import { claudexorStatus, accountRows, familyLabel } from './claudexor_status_store.js';
+import { ACCOUNTS_UNSUPPORTED_STATUS, claudexorStatus, accountRows, familyLabel } from './claudexor_status_store.js';
 import { LOGIN_CARD_FULL, createLoginCardController } from './harness_login_cards.js';
 import { harnessIdentityMarkup } from './harness_presentation.js';
 import {
@@ -68,8 +68,8 @@ export const LADDER_FOOTNOTE =
 export function connectedHarnesses(snapshot) {
     // Which preset families the daemon vouches a signed-in account for, in the
     // stable family order. `accountRows` is the SSOT projection of the status
-    // payload (native CLI session + verified credential profiles alike), so
-    // this step and the accounts panel can never disagree about "connected".
+    // payload, so this step and the accounts panel can never disagree about
+    // "connected".
     // An account the owner switched OFF is skipped however healthy its login:
     // rotation never takes it, so counting it here would declare a family
     // connected on a pool the engine will not use. Absent stays connected —
@@ -337,12 +337,17 @@ export function completionFailureNotice(error) {
 
 export function agentsOutcomeText(connected = [], {
     accountsKnown = true,
+    accountsUnsupported = false,
     catalogKnown = false,
     skipPresets = false,
     snapshot,
 } = {}) {
     // What the owner is told BEFORE finishing. Every verb is conditional,
     // because the compiler can still refuse a seat no live model id satisfies.
+    if (accountsUnsupported) {
+        return 'Subscriptions can’t be connected until a newer Claudexor runs. Your draft is kept; '
+            + 'configure API access to continue.';
+    }
     if (!accountsKnown) {
         return 'Accounts could not be checked. Your draft is kept; refresh the connection '
             + 'or configure API access to continue.';
@@ -385,7 +390,8 @@ export function agentsOutcomeText(connected = [], {
     return clauses.join(' ');
 }
 
-export function familyStatusText(snapshot, harness, { accountsKnown = true } = {}) {
+export function familyStatusText(snapshot, harness, { accountsKnown = true, accountsUnsupported = false } = {}) {
+    if (accountsUnsupported) return { tone: 'muted', text: ACCOUNTS_UNSUPPORTED_STATUS };
     if (!accountsKnown) return { tone: 'muted', text: 'Not checked' };
     const count = harnessAccountCount(snapshot, harness);
     if (!count) return { tone: 'muted', text: 'Not connected' };
@@ -499,9 +505,11 @@ export function ladderHtml() {
     `;
 }
 
-export function familyRowHtml(family, { status, connected = false }) {
+export function familyRowHtml(family, { status, connected = false, connectable = true }) {
     // Equivalent rows (docs/DESIGN.md §6): no family gets extra weight for being
     // first or already connected — only its status text and its action change.
+    // An engine on the retired account model gets no Connect: no connection
+    // made there could be listed or confirmed.
     return `
         <div class="agent-family-row" data-agent-family="${escapeHtml(family.harness)}">
             <span class="agent-family-identity">
@@ -514,15 +522,16 @@ export function familyRowHtml(family, { status, connected = false }) {
                 </span>
                 <span class="agent-family-status" data-tone="${escapeHtml(status.tone)}">${escapeHtml(status.text)}</span>
             </span>
-            <button type="button" class="btn btn-secondary" data-agent-connect="${escapeHtml(family.harness)}">
+            ${connectable ? `<button type="button" class="btn btn-secondary" data-agent-connect="${escapeHtml(family.harness)}">
                 ${escapeHtml(connected ? 'Add another' : 'Connect')}
-            </button>
+            </button>` : ''}
         </div>
     `;
 }
 
 export function familyListHtml(snapshot, {
     accountsKnown = true,
+    accountsUnsupported = false,
     catalogKnown = false,
 } = {}) {
     const connected = new Set(accountsKnown ? connectedHarnesses(snapshot) : []);
@@ -530,8 +539,9 @@ export function familyListHtml(snapshot, {
         ...family,
         label: familyLabel(family.harness, snapshot, { catalogKnown }),
     }, {
-        status: familyStatusText(snapshot, family.harness, { accountsKnown }),
+        status: familyStatusText(snapshot, family.harness, { accountsKnown, accountsUnsupported }),
         connected: connected.has(family.harness),
+        connectable: !accountsUnsupported,
     })).join('');
 }
 
@@ -713,6 +723,7 @@ export function createAgentsStep({
         if (state.disposed) return;
         const snapshot = store.snapshot;
         const known = accountsKnown();
+        const unsupported = Boolean(store.accountsUnsupported);
         const list = el('agents-family-list');
         if (list) {
             // Rebuild ONLY on a real change. The status store settles every few
@@ -721,6 +732,7 @@ export function createAgentsStep({
             // is being replaced.
             const html = familyListHtml(snapshot, {
                 accountsKnown: known,
+                accountsUnsupported: unsupported,
                 catalogKnown: Boolean(store.catalogKnown),
             });
             if (html !== state.listHtml) {
@@ -740,6 +752,7 @@ export function createAgentsStep({
         if (outcome) {
             outcome.textContent = agentsOutcomeText(state.connected, {
                 accountsKnown: known,
+                accountsUnsupported: unsupported,
                 catalogKnown: Boolean(store.catalogKnown),
                 skipPresets: state.skipPresets,
                 snapshot,
