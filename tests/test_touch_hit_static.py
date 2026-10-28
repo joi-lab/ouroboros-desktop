@@ -11,8 +11,9 @@ INSET = "inset: var(--ui-hit-inset);"
 CARRIERS = {
     "web/modules/composer.js": ('class="chat-plus-btn ui-hit-area"', 'class="chat-send-inline ui-hit-area"'),
     "web/modules/composer_subagents.js": ('class="chat-capsule-head ui-hit-area chat-subagents-head"',
-                                          'class="chat-seg ui-hit-area"',
-                                          'class="btn btn-default btn-sm chat-subagents-settings ui-hit-area"'),
+                                          'class="chat-seg ui-hit-area"'),
+    # The one hint's action (Subagents' Open Settings when Settings has them off).
+    "web/modules/ui_hint.js": ('class="ui-hint-action ui-hit-area"',),
     "web/modules/voice_controls.js": ("className: 'voice-btn voice-mic ui-hit-area'",),
     "web/modules/message_actions.js": ("button.className = 'chat-message-action ui-hit-area';",),
     "web/modules/composer_chips.js": ("button.className = 'chat-composer-chip ui-hit-area';",

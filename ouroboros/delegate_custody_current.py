@@ -655,13 +655,17 @@ def write_fold(txn, folded: Dict[str, Any], *, replace: bool) -> None:
 
 
 def rebuild(root, *, replace=False) -> int:
-    """Explicit migration/repair only: fold the retained chain once."""
+    """Explicit migration/repair only: fold the retained chain once. The strict read precedes
+    the write, so a segment that cannot be listed, opened or read raises before any retained
+    row is replaced. Offline: a writer appending meanwhile is not coordinated with the fold."""
     from ouroboros import delegate_custody as c
     from ouroboros.obligations import ObligationsUnavailable
 
-    if c.custody_chain_unreadable(root):
-        raise ObligationsUnavailable("custody event chain is unreadable")
-    folded = fold(tuple(c._iter_rows(c.event_log_path(root))))
+    try:
+        rows = tuple(c._iter_rows(c.event_log_path(root), strict=True))
+    except OSError as exc:
+        raise ObligationsUnavailable(f"custody event chain is unreadable: {exc}") from exc
+    folded = fold(rows)
     with store.open_store(root, write=True) as txn:
         write_fold(txn, folded, replace=replace)
         debts = txn.set_rows("delegated_runs")

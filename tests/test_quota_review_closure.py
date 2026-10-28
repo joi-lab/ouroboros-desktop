@@ -302,21 +302,6 @@ def test_freshness_compatibility_stops_after_non_selector_failure(failure):
     assert len(gateway.calls) == 2  # no plain GET on malformed/5xx/unknown transport
 
 
-@pytest.mark.parametrize("profiles", [None, 42, {}, "bad"])
-def test_malformed_roster_cannot_identify_default_or_crash_route_health(profiles):
-    from ouroboros.claudexor_observations import default_subject_aliases
-    from ouroboros.subagent_route_health import _exhausted_window
-    roster = {"accountPools": [], "profiles": profiles}
-    assert default_subject_aliases(roster, "claude", "claude-default") == ()
-    class Gateway:
-        def credential_profiles(self): return roster
-        def quota_state(self, **scope):
-            return {"snapshots": [{"subject": {"harness": "claude", "subject_id": None},
-                    "freshness": "fresh", "availability": {"state": "exhausted", "resets_at": "2099-01-01T00:00:00Z"}}],
-                    "availability_scope": {"model": None, "requestKind": "text", "basis": "quota_block"}}
-    assert _exhausted_window(Gateway(), "claude", pinned_profile="claude-default") == (False, "")
-
-
 def test_renewals_keep_visible_full_base_through_reclaim_and_restore_it_when_absent(publisher, monkeypatch):
     from datetime import timedelta
     from types import SimpleNamespace
@@ -434,3 +419,25 @@ def test_exact_snapshot_source_survives_normal_isolated_drive_prune(publisher):
     assert any(row["task_id"] == task for row in report["pruned"]) and not drive.exists()
     assert observability.read_call_payload(canonical, task_id=task, call_id="request")[1]["messages"] == messages
     assert observability.read_blob_ref(canonical, source, expected_kind="txt") == original
+
+
+def test_route_health_reads_only_the_exact_default_subject_and_never_the_roster():
+    """#244: no roster read guesses that a null subject is `<harness>-default`."""
+    from ouroboros.subagent_route_health import _exhausted_window
+
+    class Gateway:
+        def __init__(self, subject):
+            self.subject = subject
+
+        def credential_profiles(self):
+            raise AssertionError("route health must not read the roster to guess a quota subject")
+
+        def quota_state(self, **scope):
+            return {"snapshots": [{"subject": {"harness": "claude", "subject_id": self.subject},
+                                   "freshness": "fresh",
+                                   "availability": {"state": "exhausted", "resets_at": "2099-01-01T00:00:00Z"}}],
+                    "availability_scope": {"model": None, "requestKind": "text", "basis": "quota_block"}}
+
+    assert _exhausted_window(Gateway(None), "claude", pinned_profile="claude-default") == (False, "")
+    assert _exhausted_window(Gateway("claude-default"), "claude", pinned_profile="claude-default") == (
+        True, "2099-01-01T00:00:00Z")

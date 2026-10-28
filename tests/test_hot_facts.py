@@ -126,6 +126,7 @@ def test_derivation_cas_cannot_overwrite_a_racing_writer(tmp_path, monkeypatch):
 
 
 def test_derivation_keeps_mismatched_task_identity_unreadable(tmp_path):
+    """Another task's body derives nothing, not even its root: the job waits on it as damaged input."""
     with store.open_store(tmp_path, write=True) as txn:
         _old_task(txn, "bad")
         _old_task(txn, "good")
@@ -134,7 +135,11 @@ def test_derivation_keeps_mismatched_task_identity_unreadable(tmp_path):
         txn.conn.execute("UPDATE task_bodies SET body=? WHERE task_id='bad'", (store.encode_document(document),))
     for derive in (False, True):
         if derive:
-            assert hot.run_hot_facts(tmp_path)["state"] == "done"
+            with pytest.raises(ValueError, match="identity_mismatch"):
+                hot.run_hot_facts(tmp_path)
+            assert maintenance_jobs.job(tmp_path, hot.JOB)["waiting_on"]["id"] == "bad"
+            with store.open_store(tmp_path, write=False) as txn:
+                assert txn.row("bad", "root_task_id", "control_valid") == (None, None)
         with pytest.raises(ValueError, match="authority is unreadable"):
             hot.read(tmp_path, "bad")
         assert hot.read(tmp_path, "good")["control_valid"] == 1

@@ -357,13 +357,15 @@ def wake_reason(ctx: Any, chosen: Dict[str, Any], *, seen: Any = (), review_entr
     return ""
 
 
-def cold_blockers(ctx: Any, *, chosen: Dict[str, Any] | None = None,
-                  allow_transfer: bool = False, transferred: Any = ()) -> List[Dict[str, str]]:
+def cold_blockers(ctx: Any, *, chosen: Dict[str, Any] | None = None, allow_transfer: bool = False,
+                  transferred: Any = (), gaps: List[Dict[str, str]] | None = None) -> List[Dict[str, str]]:
     """What this task still runs that a COLD sleep would leave unwatched.
 
     Only exact bound ordinary external runs can be handed to the body. Local
     producers, services, other actors and unknown starts still keep the actor.
     Arming may propose a transfer; release needs its exact accepted pairs.
+    ``gaps`` receives the damaged rows the tree census tied to no tree: named, never a blocker, and
+    only once its custody and model-request links were read; until then such a row holds.
     """
     from ouroboros.budget_pause import observe_task_runs
     from ouroboros import delegate_custody as custody
@@ -403,7 +405,8 @@ def cold_blockers(ctx: Any, *, chosen: Dict[str, Any] | None = None,
                     if record.proc.poll() is None)
     # Only this actor's accepted external obligations transfer. Every member's
     # other retained custody matters, including paused and terminal children.
-    from ouroboros.owner_pause import tree_member_results, current_tool_operation, _member_coordinates
+    from ouroboros.owner_pause import (tree_member_results, tree_model_requests, current_tool_operation,
+                                       _member_coordinates)
     from ouroboros.delegate_custody_current import tree_task_ids
     from ouroboros import process_custody as pc
     from ouroboros.platform_layer import pid_is_alive
@@ -411,10 +414,27 @@ def cold_blockers(ctx: Any, *, chosen: Dict[str, Any] | None = None,
     root = _canonical_root(ctx)
     tree_id = _member_coordinates(ctx)[1]
     dependencies = set(chosen.get("tasks", []) + chosen.get("senders", []))
-    members = {str(ctx.task_id)}
+    members, links_known = {str(ctx.task_id)}, True  # a row is unlinked only once every link source answered
     try:
         members.update(tree_task_ids(root, tree_id))  # the store answers or raises: unreadable is a blocker
-        for task_id, row in tree_member_results(root, tree_id).items():
+    except Exception as exc:
+        links_known = False
+        blockers.append({"kind": "tree_custody_unreadable", "detail": str(exc)[:200]})
+    linked = set(members)
+    try:  # the root's open model requests tie their tasks here, as Continue's census reads them
+        linked.update(str(attempt.get("task_id") or "") for attempt in tree_model_requests(root, tree_id))
+    except Exception as exc:
+        links_known = False
+        blockers.append({"kind": "attempt_custody_unreadable", "detail": str(exc)[:200]})
+    try:  # each source answers alone: a failed body census leaves the custody members observed below
+        census = tree_member_results(root, tree_id, linked=linked)
+        for task_id, fact in census.unresolved.items():
+            if fact["linked"] or not links_known:  # its record is unknown; its runs and processes are still read by id
+                members.add(task_id)
+                blockers.append({"kind": "member_record_unreadable", "detail": f"{task_id}: {fact['reason']}"})
+            elif gaps is not None:
+                gaps.append({"task_id": task_id, "reason": fact["reason"]})
+        for task_id, row in census.members.items():
             members.add(task_id)
             own = task_id == str(ctx.task_id)
             if not own and row.get("status") == "running":
@@ -431,6 +451,9 @@ def cold_blockers(ctx: Any, *, chosen: Dict[str, Any] | None = None,
             from ouroboros.tool_custody import retained_tool_custody
             if retained_tool_custody(root, task_id, row, excluding=own_sleep):
                 blockers.append({"kind": "member_custody", "detail": task_id})
+    except Exception as exc:
+        blockers.append({"kind": "tree_custody_unreadable", "detail": str(exc)[:200]})
+    try:
         for member in members - {str(ctx.task_id)}:
             observed = observe_task_runs(root, member, request_stop=False)
             if observed.get("custody_read") != "ok" or observed.get("runs"):
@@ -496,10 +519,14 @@ def request_sleep(ctx: Any, chosen: Dict[str, Any], mode: str) -> Dict[str, Any]
                     and row.get("status") in {"requested", "scheduled"}):
                 raise ValueError("this sleep retains the project lane needed by the selected queued root; "
                                  "choose another source or finish the external writer before releasing its lane")
+    gaps: List[Dict[str, str]] = []
     if mode == MODE_COLD:
-        blockers = cold_blockers(ctx, chosen=chosen, allow_transfer=True)
+        blockers = cold_blockers(ctx, chosen=chosen, allow_transfer=True, gaps=gaps)
         if blockers:
             raise ColdSleepBlocked(blockers)
+    from ouroboros.pause_notices import gap_fact, gap_words
+
+    unwatched = gap_fact(gaps)  # damaged rows no link ties to this tree: armed beside, never waited for
     sleep_id = uuid.uuid4().hex
     ctx._owner_wait_requested = f"sleep:{sleep_id}"
     ctx._model_sleep = {"sleep_id": sleep_id, "mode": mode, **chosen}
@@ -508,7 +535,9 @@ def request_sleep(ctx: Any, chosen: Dict[str, Any], mode: str) -> Dict[str, Any]
             "note": ("The sleep begins after this tool batch completes; you wake at the next round with the "
                      "reason. Selected mail wakes you" if not chosen.get("any_mail")
                      else "The sleep begins after this tool batch completes; any addressed mail wakes you")
-                    + "; owner input and a new question from your own executors always do."}
+                    + "; owner input and a new question from your own executors always do."
+                    + gap_words(unwatched, "This cold sleep does not watch"),
+            **({"membership_gaps": unwatched} if unwatched else {})}
 
 
 def begin(ctx: Any, *, started_at: float | None = None) -> None:

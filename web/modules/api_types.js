@@ -1258,7 +1258,7 @@
  * @property {Object<string, boolean>=} resource_capabilities Catalog-negotiated read, refresh, reset and inspect_reset operations.
  * @property {ClaudexorReadState=} resource_capabilities_read Operations-catalog evidence, independent of reads.catalog (agent capabilities).
  * @property {ClaudexorStatusReads=} reads
- * @property {boolean=} unified_accounts
+ * @property {boolean=} unified_accounts This read's roster is the unified account model; a pre-unified one fails accounts with facets.accounts.error account_model_unsupported.
  * @property {Object<string, {observed_at: ?string, stale: boolean, error: ?string}>=} facets Per facet; a failed or unasked facet serves its last read, stale.
  * @property {SubagentLastDelegation=} subagent_last_delegation
  * @property {string=} error

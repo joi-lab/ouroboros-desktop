@@ -653,7 +653,8 @@ def run_llm_loop(
                     _inject_round_checkpoints(
                         round_idx=round_idx, messages=messages, accumulated_usage=accumulated_usage, tools=tools,
                         event_queue=event_queue, task_id=task_id, drive_logs=drive_logs,
-                        budget_remaining_usd=budget_remaining_usd, cost_ceiling=cost_ceiling, active_use_local=active_use_local)
+                        budget_remaining_usd=budget_remaining_usd, cost_ceiling=cost_ceiling, active_use_local=active_use_local,
+                        llm_trace=llm_trace)
 
                     messages = _run_round_compaction(messages, _CompactionRoundContext(
                             tools=tools, drive_root=drive_root, drive_logs=drive_logs,

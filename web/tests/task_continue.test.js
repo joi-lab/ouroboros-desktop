@@ -438,3 +438,48 @@ test('a held Continue toasts the blockers its census observed, not a generic wai
     assert.deepEqual(toasts, [["Continue accepted; it starts by itself when the earlier attempt's work finishes: "
         + 'a delegated start has an unknown outcome (no run was recorded).', 'ok']]);
 });
+
+test('an accepted Continue names the records its census did not wait for in its own warning, never as another task\'s', async () => {
+    // The real request through fetch: the server's admission answer with its typed gap (membership_gaps).
+    const priorFetch = globalThis.fetch;
+    const toasts = [];
+    const toast = (...args) => toasts.push(args);
+    const gap = { rows: [{ task_id: 'stray-1', reason: 'body_unreadable' }], count: 1 };
+    const replies = [
+        { ok: true, successor_task_id: 'gap-root-c1', held: false, membership_gaps: gap },
+        { ok: true, successor_task_id: 'gap-root-c1', held: false, replay: true, membership_gaps: gap },
+        { ok: true, successor_task_id: 'plain-root-c1', held: false },
+    ];
+    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => replies.shift() });
+    try {
+        assert.equal(await continueTaskAction('gap-root', { storage: memoryStorage(), toast }), 'gap-root-c1');
+        assert.deepEqual(toasts.shift(), ['Continue accepted.', 'ok'], 'the action\'s own words are unchanged');
+        const [words, tone, options] = toasts.shift();
+        assert.equal(words, 'Continue did not wait for 1 saved task record that could not be read and that nothing '
+            + 'ties to this task (stray-1); whether it belongs here is unknown.');
+        assert.equal(tone, 'warn');
+        assert.deepEqual(options, { ttl: 0, dismissLabel: 'Dismiss notice' }, 'kept until the owner dismisses it');
+        assert.doesNotMatch(words, /another task|other task|belongs to/);
+        // A replay of the same admission answers the same gap.
+        assert.equal(await continueTaskAction('gap-root', { storage: memoryStorage(), toast }), 'gap-root-c1');
+        assert.equal(toasts.length, 2);
+        assert.equal(toasts[1][0], words);
+        toasts.length = 0;
+        assert.equal(await continueTaskAction('plain-root', { storage: memoryStorage(), toast }), 'plain-root-c1');
+        assert.deepEqual(toasts, [['Continue accepted.', 'ok']], 'no gap, no second notice');
+    } finally {
+        globalThis.fetch = priorFetch;
+    }
+});
+
+test('a held Continue keeps its observed blockers and adds a counted, bounded gap', async () => {
+    const toasts = [];
+    const rows = Array.from({ length: 20 }, (_, i) => ({ task_id: `r${i}`, reason: 'body_unreadable' }));
+    const request = async () => ({ ok: true, held: true, successor_task_id: 'held-gap-c1',
+        blockers: [{ kind: 'running_member', task_id: 'kid' }], membership_gaps: { rows, count: 23 } });
+    assert.equal(await continueTaskAction('held-gap', { request, storage: memoryStorage(), toast: (...a) => toasts.push(a) }),
+        'held-gap-c1');
+    assert.equal(toasts[0][0], "Continue accepted; it starts by itself when the earlier attempt's work finishes: "
+        + 'task kid is still running.');
+    assert.match(toasts[1][0], /^Continue did not wait for 23 saved task records that could not be read and that nothing ties to this task \(r0, r1, .*, r19, …\); whether they belong here is unknown\.$/);
+});

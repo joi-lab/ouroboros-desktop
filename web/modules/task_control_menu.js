@@ -15,7 +15,7 @@
 import { cancelTask, hurryTask, pauseTask, resumeTask } from './api_client.js';
 import { haptic } from './haptics.js';
 import { showToast } from './toast.js';
-import { tr } from './i18n.js';
+import { fmt, tr } from './i18n.js';
 
 export const ACTION_FINALIZE = 'finalize';
 export const ACTION_HURRY = 'hurry';
@@ -221,6 +221,35 @@ export function heldWorkFacts(blockers, limit = 3) {
         ? `${facts.slice(0, limit).join('; ')}; and ${facts.length - limit} more` : facts.join('; ');
 }
 
+// The damaged saved records an accepted Continue or Resume did not wait for (`membership_gaps`: the census
+// tied them to no task; at most 20 named, all counted). The Pause row says the same fact in the transcript
+// (ouroboros/pause_notices.py). Named, never called another task's; whether they belong here is unknown.
+const GAP_WORDS = {
+    continue: ['Continue did not wait for {n} saved task record that could not be read and that nothing ties to '
+        + 'this task ({names}); whether it belongs here is unknown.', 'Continue did not wait for {n} saved task '
+        + 'records that could not be read and that nothing ties to this task ({names}); whether they belong here is unknown.'],
+    resume: ['The Pause did not wait for {n} saved task record that could not be read and that nothing ties to '
+        + 'this task ({names}); whether it belongs here is unknown.', 'The Pause did not wait for {n} saved task '
+        + 'records that could not be read and that nothing ties to this task ({names}); whether they belong here is unknown.'],
+};
+
+/** @returns {string} the gap an accepted `action` ('continue' | 'resume') answered with, '' without one */
+export function membershipGapWords(gaps, action) {
+    const count = gaps?.count;
+    if (!Number.isInteger(count) || count <= 0 || !GAP_WORDS[action]) return '';
+    const names = (Array.isArray(gaps.rows) ? gaps.rows : []).map((row) => String(row?.task_id || '')).filter(Boolean);
+    return fmt(GAP_WORDS[action][count === 1 ? 0 : 1],
+        { n: count, names: [...names, ...(count > names.length ? ['…'] : [])].join(', ') });
+}
+
+/** A warning beside the action's own toast, kept until dismissed: a Continue's gap, or one found after the Pause
+ *  row, has no other on-screen home (docs/DESIGN.md: a warning whose line is its only home stays). */
+export function announceMembershipGap(gaps, action, toast = showToast) {
+    const words = membershipGapWords(gaps, action);
+    if (words) toast(words, 'warn', { ttl: 0, dismissLabel: 'Dismiss notice' });
+    return words;
+}
+
 export async function resumeTaskAction(taskId, { resume = resumeTask, toast = showToast } = {}) {
     const id = String(taskId || '').trim();
     if (!id || inFlight.has(id)) return;
@@ -233,6 +262,7 @@ export async function resumeTaskAction(taskId, { resume = resumeTask, toast = sh
         toast(ack.tree_only ? 'Resumed. Ouroboros or you choose which helpers continue.'
             : ack.late_phase ? 'Resuming: the work left after the delivered answer continues.'
             : 'Resuming: the task returns to the queue.', 'info');
+        announceMembershipGap(ack.membership_gaps, 'resume', toast);  // read from the Pause's current record
     } catch (exc) {
         // The server names the refusal (replay_unsafe / fence missing /
         // not budget-paused): show it verbatim instead of a generic failure,

@@ -798,8 +798,10 @@ def _child_result_projection(q: Any, task_id: str, *, receipt_task_id: str = "",
     from supervisor.terminal_delivery import _cascade_descendant_rows
 
     try:
-        rows = _cascade_descendant_rows(pathlib.Path(q.DRIVE_ROOT), task_id, strict=True)
-        audit = capture_receipt(pathlib.Path(q.DRIVE_ROOT), receipt_task_id or task_id, rows, stop=stop)
+        gaps: list = []
+        rows = _cascade_descendant_rows(pathlib.Path(q.DRIVE_ROOT), task_id, strict=True, gaps=gaps)
+        audit = capture_receipt(pathlib.Path(q.DRIVE_ROOT), receipt_task_id or task_id, rows,
+                                gap="; ".join(gaps), stop=stop)
         return receipt_text(audit, prompt=True, max_rows=_CHILD_PROJECTION_MAX_ROWS)
     except Exception:
         log.warning("owner-stop retained-work receipt unavailable for %s", task_id, exc_info=True)
