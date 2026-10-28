@@ -64,11 +64,11 @@ _POPEN_ALLOWLIST = {
     "ouroboros/tools/skill_exec.py",      # bounded skill run (waited + tracked)
     "ouroboros/tools/skill_preflight.py", # waited preflight child
     "ouroboros/marketplace/isolated_deps.py",  # waited installer child
-    # Connect's vendor-CLI install (domain op, moved here by review wave 3): ONE
-    # waited child spawned+registered atomically under the tools.shell lock,
-    # so /panic's tracked-subprocess sweep can never observe it alive but
-    # untracked (isolated_deps._run template).
-    "ouroboros/claudexor_daemon.py",
+    # Connect's vendor-CLI install (domain op, extracted from the owned-daemon
+    # module): ONE waited child spawned+registered atomically under the
+    # tools.shell lock, so /panic's tracked-subprocess sweep can never observe
+    # it alive but untracked (isolated_deps._run template).
+    "ouroboros/claudexor_harness_install.py",
     "ouroboros/extension_process_runner.py",  # waited calls and session-owned response streams
     "ouroboros/workspace_executor.py",    # custody write-through added at spawn
     "ouroboros/local_model.py",           # custody record added at spawn
