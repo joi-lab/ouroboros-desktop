@@ -29,7 +29,6 @@ import {
     harnessFamilyMarkup,
     humanizeResetAt,
     nextUpBadge,
-    quotaSubjectAliases,
     quotaSummary,
     removeAccount,
     removeAccountConfirmBody,
@@ -44,6 +43,16 @@ import { profileOptionsFor } from '../modules/route_editor_primitives.js';
 
 const MULTI = JSON.parse(readFileSync(
     fileURLToPath(new URL('./fixtures/credential_profiles_multi.json', import.meta.url)), 'utf-8'));
+// The same accounts after the engine's unified migration (#244): the detected
+// codex default login is its named `codex-default` row; claude's native default
+// was never signed in, so nothing was migrated for it.
+const MIGRATED_MULTI = {
+    profiles: [{ profile: { harness_id: 'codex', profile_id: 'codex-default', enabled: true },
+        status: { verification: 'passed', verification_source: 'local_store' },
+        identity: { email: 'n@x.io', plan: 'plus' } }, ...MULTI.profiles],
+    harnessAccounts: [],
+    accountPools: MULTI.harnessAccounts.map(({ harness_id, next_up }) => ({ harness_id, next_up })),
+};
 
 const RUNNING = { state: 'running', engine_version: '3.3.13', runtime: { state: 'ready' } };
 
@@ -113,25 +122,24 @@ test('an empty family that WAS read says so, and its button still connects', () 
 
 test('several accounts of one family are grouped, counted, and called equivalent', () => {
     // The owner's ask, verbatim: «все акки клод кода должны быть эквивалентны».
-    // Three codex accounts (one native + two named) become ONE card whose
-    // header says they rotate — no row is the "real" one.
-    const groups = accountGroups(payload({ profiles: MULTI }), { accountsRead: 'ok' });
+    // Three codex accounts (the migrated default + two named) become ONE card
+    // whose header says they rotate — no row is the "real" one.
+    const groups = accountGroups(payload({ profiles: MIGRATED_MULTI }), { accountsRead: 'ok' });
     const codex = groups.find((g) => g.harness === 'codex');
     assert.equal(codex.rows.length, 3);
     assert.equal(codex.status.tone, 'ok');
     assert.match(codex.status.label, /3 accounts · rotating/);
     // Once a family HAS accounts its header button ADDS one, which is what
-    // makes them equivalent instead of one-default-plus-extras. The affordance
-    // used to hang off the native row only.
+    // makes them equivalent instead of one-default-plus-extras.
     assert.equal(familyActionLabel(codex, payload()), 'Add account');
 
-    // Both claude rows are DISABLED in the fixture. That owner-authored state
-    // outranks their failed/empty verification: the header does not shout
-    // "need attention" and does not pretend the remedy is another sign-in.
+    // The claude row is DISABLED in the fixture. That owner-authored state
+    // outranks its failed verification: the header does not shout "need
+    // attention" and does not pretend the remedy is another sign-in.
     // (An ENABLED failure keeps the family-level alarm; pinned below.)
     const claude = groups.find((g) => g.harness === 'claude');
     assert.equal(claude.status.tone, 'muted');
-    assert.match(claude.status.label, /2 accounts · all disabled/);
+    assert.match(claude.status.label, /1 account · all disabled/);
 });
 
 test('one connected account reads as connected, not as a count', () => {
@@ -151,9 +159,9 @@ test('one connected account reads as connected, not as a count', () => {
 test('"N accounts · rotating" counts only the accounts rotation can actually use', () => {
     // Caught by LOOKING at the rendered tab: a Cursor family holding one signed-in
     // account and one cold native row announced "2 accounts · rotating", promising
-    // a rotation width that did not exist.
+    // a rotation width that did not exist (a cold row is any row not signed in).
     const mixed = [
-        { harness: 'cursor', profile_id: '', kind: 'native', status: {} },
+        { harness: 'cursor', profile_id: 'cursor-default', kind: 'profile', status: {} },
         { harness: 'cursor', profile_id: 'ultra', kind: 'profile',
           status: { verification: 'passed', verification_source: 'local_store' } },
     ];
@@ -227,11 +235,13 @@ test('the Next up badge renders every wire kind fail-safe, unknown included', ()
     assert.equal(nextUpBadge(withPool({ kind: 'api_key_route' }), 'codex'),
         'Next up: API key (no subscription capacity)');
     assert.equal(nextUpBadge(withPool({ kind: 'none', reason: 'nothing routable' }), 'codex'), '');
-    // The legacy union, through the same dual-wire reader.
+    // An old client's carrier speaks for nothing, and a retired `native` kind
+    // reaching the pool union is just an unknown kind.
     const legacy = { ...base, profiles: { harnessAccounts: [
         { harness_id: 'codex', next_up: { kind: 'native', route: 'local_session' } },
     ], profiles: [] } };
-    assert.equal(nextUpBadge(legacy, 'codex'), 'Next up: default account');
+    assert.equal(nextUpBadge(legacy, 'codex'), '');
+    assert.equal(nextUpBadge(withPool({ kind: 'native', route: 'local_session' }), 'codex'), 'Next up: unknown');
     // FAIL-SAFE: an unknown future kind is a generic unknown, never a crash
     // and never a guessed account (plan §E: old clients must degrade honestly).
     assert.equal(nextUpBadge(withPool({ kind: 'quantum_pool' }), 'codex'), 'Next up: unknown');
@@ -243,33 +253,18 @@ test('the Next up badge renders every wire kind fail-safe, unknown included', ()
         { accountsRead: 'failed' }), '');
 });
 
-test('the migrated default row may inherit the LEGACY quota subject, exactly once', () => {
-    // Unified migration window (plan §K.3): the quota journal is not
-    // rewritten, so right after migration the row's fresh window can still be
-    // keyed by the legacy ''/null subject. The alias applies ONLY to the
-    // reserved `<harness>-default` row on a unified payload, and an
-    // exact-keyed reading always wins.
-    const unified = { unified_accounts: true };
-    const row = { harness: 'claude', profile_id: 'claude-default', kind: 'profile' };
-    assert.deepEqual(quotaSubjectAliases(row, unified), ['']);
-    assert.deepEqual(quotaSubjectAliases({ ...row, profile_id: 'work' }, unified), []);
-    assert.deepEqual(quotaSubjectAliases(row, {}), [], 'legacy engines get no alias');
-
-    const legacyKeyed = [{ subject: { harness: 'claude', subject_id: '' }, freshness: 'fresh',
+test('a row reads only its exact quota subject; an unprofiled window is nobody\'s', () => {
+    // #244: a null/empty subject is an unprofiled route's own window (an
+    // explicit API key), never `<harness>-default`'s, and no row borrows it.
+    const unprofiled = [{ subject: { harness: 'claude', subject_id: null }, freshness: 'fresh',
         constraints: [{ used_ratio: 0.5, resets_at: '2026-08-09T14:00:00Z' }] }];
     const now = Date.parse('2026-08-09T12:00:00Z');
-    const inherited = quotaSummary(legacyKeyed, 'claude', 'claude-default',
-        { nowMs: now, fallbackSubjectIds: [''] });
-    assert.match(inherited.label, /^50% used/);
-    // The exact subject wins the moment a re-keyed reading exists.
-    const reKeyed = [...legacyKeyed,
+    assert.equal(quotaSummary(unprofiled, 'claude', 'claude-default', { nowMs: now }).label, 'Usage unavailable');
+    assert.equal(quotaSummary(unprofiled, 'claude', 'work', { nowMs: now }).label, 'Usage unavailable');
+    const exact = [...unprofiled,
         { subject: { harness: 'claude', subject_id: 'claude-default' }, freshness: 'fresh',
           constraints: [{ used_ratio: 0.2, resets_at: '2026-08-09T14:00:00Z' }] }];
-    assert.match(quotaSummary(reKeyed, 'claude', 'claude-default',
-        { nowMs: now, fallbackSubjectIds: [''] }).label, /^20% used/);
-    // No alias, no inheritance: another named row never borrows the window.
-    assert.equal(quotaSummary(legacyKeyed, 'claude', 'work', { nowMs: now }).label,
-        'Usage unavailable');
+    assert.match(quotaSummary(exact, 'claude', 'claude-default', { nowMs: now }).label, /^20% used/);
 });
 
 test('the family button keeps its ADD intent even when the runtime needs repair', () => {
@@ -281,7 +276,7 @@ test('the family button keeps its ADD intent even when the runtime needs repair'
     // step would remove the add intent the card exists for. The repair is a
     // prerequisite the login card performs and reports in the foreground, and
     // the service banner above already names the fault.
-    const populated = accountGroups(payload({ profiles: MULTI }), { accountsRead: 'ok' })
+    const populated = accountGroups(payload({ profiles: MIGRATED_MULTI }), { accountsRead: 'ok' })
         .find((g) => g.harness === 'codex');
     const broken = { daemon: { state: 'stale', runtime: { state: 'error' } } };
     assert.equal(familyActionLabel(populated, broken), 'Add account');
@@ -344,23 +339,21 @@ test('the unknown-status refresh action preserves recovery for every profile har
 // Row anatomy.
 // ---------------------------------------------------------------------------
 
-test('the legacy default row is named by who it is, never by a retired account TYPE', () => {
-    // Unified-accounts sprint: "Default CLI login" and "Managed by the X CLI"
-    // described a separate account type the unified model retired. A legacy
-    // pseudo-row is named by the identity the daemon observed — its email —
-    // and only an identity-less one falls back to the neutral "Default
-    // account". The caption is gone from the metadata line entirely.
-    const native = { harness: 'codex', profile_id: '', kind: 'native', identity: {},
+test('a migrated default row is named by who it is, never by a retired account TYPE', () => {
+    // "Default CLI login" and "Managed by the X CLI" described a separate
+    // account type the unified model retired. A row is named by its display
+    // name, then the identity the daemon observed — its email — then its id;
+    // the caption is gone from the metadata line, and every row keeps the
+    // engine's own Enabled/Remove routes beside Sign in again.
+    const migrated = { harness: 'codex', profile_id: 'codex-default', kind: 'profile', identity: {},
         status: { verification: 'passed', verification_source: 'local_store' } };
-    assert.equal(accountName(native), 'Default account');
-    assert.equal(accountName({ ...native, identity: { email: 'owner@example.com' } }),
+    assert.equal(accountName(migrated), 'codex-default');
+    assert.equal(accountName({ ...migrated, identity: { email: 'owner@example.com' } }),
         'owner@example.com');
-    const meta = accountMetaLine(native, payload({ harnesses: [{ id: 'codex' }] }));
+    const meta = accountMetaLine(migrated, payload({ harnesses: [{ id: 'codex' }] }));
     assert.doesNotMatch(meta, /Managed by/);
     assert.doesNotMatch(meta, /CLI/);
-    // Removal is a NAMED-profile affordance: this app cannot honestly sign a
-    // vendor CLI out, so it does not offer to.
-    assert.equal(rowActionLabel(native, payload()), 'Sign in again');
+    assert.equal(rowActionLabel(migrated, payload()), 'Sign in again');
 });
 
 test('the metadata line leads with humanized usage, never a raw ISO instant', () => {
