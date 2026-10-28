@@ -481,7 +481,9 @@ def test_the_few_current_rows_cost_the_same_over_any_history_once_analyzed(tmp_p
         with CostMeter(root) as meter:
             held = tagged("held", lambda: current.snapshot(root)["state"])
             live = tagged("live", lambda: obligations.members(root, "nonterminal"))
+            health = tagged("health", lambda: current.health_runs(root, "done-1"))  # the context's run lines
         assert sorted(held) == [f"run-live-{n}" for n in range(3)], sorted(held)
         assert {f"live-{n}" for n in range(3)} <= set(live) and not set(live) & {"done-0", "done-1"}, sorted(live)
-        steps[history] = {tag: meter.snapshot(tag)["counts"].get("vm_steps", 0) for tag in ("held", "live")}
-    assert all(steps[300][tag] - steps[10][tag] <= VM_STEP for tag in ("held", "live")), steps
+        assert sorted(health) == ["run-closed-1", *sorted(held)], sorted(health)
+        steps[history] = {tag: meter.snapshot(tag)["counts"].get("vm_steps", 0) for tag in ("held", "live", "health")}
+    assert all(steps[300][tag] - steps[10][tag] <= VM_STEP for tag in ("held", "live", "health")), steps
