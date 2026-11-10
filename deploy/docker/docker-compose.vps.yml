@@ -1,0 +1,34 @@
+services:
+  ouroboros:
+    container_name: ouroboros-headless
+    build:
+      context: ${OUROBOROS_REPO_DIR_HOST:-/opt/ouroboros-headless}
+      dockerfile: Dockerfile
+      args:
+        OUROBOROS_INSTALL_BROWSER_TOOLS: "${VPS_ENABLE_BROWSER_TOOLS:-0}"
+    restart: unless-stopped
+    env_file:
+      - ${OUROBOROS_ENV_FILE:-/etc/ouroboros-headless/.env}
+    environment:
+      OUROBOROS_SERVER_HOST: 0.0.0.0
+      OUROBOROS_REPO_DIR: /app
+      OUROBOROS_DATA_DIR: /var/lib/ouroboros-headless/data
+    ports:
+      - "${OUROBOROS_HOST_BIND:-127.0.0.1}:${OUROBOROS_SERVER_PORT:-8765}:${OUROBOROS_SERVER_PORT:-8765}"
+    volumes:
+      - ${OUROBOROS_REPO_DIR_HOST:-/opt/ouroboros-headless}:/app
+      - /var/lib/ouroboros-headless/data:/var/lib/ouroboros-headless/data
+      - /var/lib/ouroboros-headless/workspace:/var/lib/ouroboros-headless/workspace
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import os,urllib.request,pathlib; d=os.environ.get('OUROBOROS_DATA_DIR','/var/lib/ouroboros-headless/data'); f=pathlib.Path(d)/'state'/'server_port'; p=(f.read_text().strip() if f.exists() else os.environ.get('OUROBOROS_SERVER_PORT','8765')); urllib.request.urlopen(f'http://127.0.0.1:{p}/api/health', timeout=5).read()\""
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

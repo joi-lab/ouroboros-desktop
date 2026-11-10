@@ -1,0 +1,24 @@
+[Unit]
+Description=Ouroboros Headless (Docker Compose)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ouroboros-headless
+RemainAfterExit=yes
+Environment=COMPOSE_FILE=/opt/ouroboros-headless/deploy/docker/docker-compose.vps.yml
+Environment=ENV_FILE=/etc/ouroboros-headless/.env
+ExecStart=/usr/bin/docker compose --env-file ${ENV_FILE} -f ${COMPOSE_FILE} up -d
+ExecStartPost=/opt/ouroboros-headless/deploy/docker/systemd-healthcheck.sh ${ENV_FILE} /var/lib/ouroboros-headless/data/state/server_port
+ExecStop=/usr/bin/docker compose --env-file ${ENV_FILE} -f ${COMPOSE_FILE} down
+ExecReload=/usr/bin/docker compose --env-file ${ENV_FILE} -f ${COMPOSE_FILE} up -d
+Restart=on-failure
+RestartSec=15
+StartLimitIntervalSec=120
+StartLimitBurst=3
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
